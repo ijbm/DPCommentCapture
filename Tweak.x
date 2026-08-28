@@ -115,7 +115,7 @@
     self.toggleBtn.frame = CGRectMake(0,0,80,44);
     [self.toggleBtn setTitle:@"开始" forState:UIControlStateNormal];
     [self.toggleBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    self.toggleBtn.titleLabel.font = [UIFont systemFontOfSize:14 fontWeight:UIFontWeightBold];
+    self.toggleBtn.titleLabel.font = [UIFont boldSystemFontOfSize:14];
     [self.toggleBtn addTarget:self action:@selector(onToggle) forControlEvents:UIControlEventTouchUpInside];
     [self.panel addSubview:self.toggleBtn];
 
@@ -168,7 +168,6 @@
         self.countLabel.hidden = NO;
         self.exportBtn.hidden = NO;
         self.clearBtn.hidden = NO;
-        CGRect f = self.panel.frame;
         self.panel.frame = CGRectMake(0,0,80,94);
         self.frame = CGRectMake(self.frame.origin.x, self.frame.origin.y, 80, 94);
     } else {
@@ -219,11 +218,12 @@
 }
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    // 尝试从导航标题获取商家名
-    NSString *title = self.navigationItem.title;
-    if (title.length > 0) {
-        [[DPCaptureManager shared] setCurrentShopName:title];
-    }
+    @try {
+        NSString *title = [[self valueForKey:@"navigationItem"] title];
+        if (title.length > 0) {
+            [[DPCaptureManager shared] setCurrentShopName:title];
+        }
+    } @catch(id e) {}
 }
 %end
 
@@ -231,10 +231,12 @@
 %hook UGCNewReviewListController
 - (void)viewDidLoad {
     %orig;
-    NSString *title = self.navigationItem.title;
-    if (title.length > 0) {
-        [[DPCaptureManager shared] setCurrentShopName:title];
-    }
+    @try {
+        NSString *title = [[self valueForKey:@"navigationItem"] title];
+        if (title.length > 0) {
+            [[DPCaptureManager shared] setCurrentShopName:title];
+        }
+    } @catch(id e) {}
 }
 %end
 
@@ -305,7 +307,7 @@
                 @try {
                     NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
                     if (json) {
-                        [DPCaptureManager.shared parseReviewJSON:json];
+                        [[DPCaptureManager shared] performSelector:NSSelectorFromString(@"parseReviewJSON:") withObject:json];
                     }
                 } @catch(id e) {}
             }
@@ -317,6 +319,9 @@
 %end
 
 // ==================== DPCaptureManager JSON解析扩展 ====================
+@interface DPCaptureManager (JSONParse)
+- (void)parseReviewJSON:(NSDictionary *)json;
+@end
 @implementation DPCaptureManager (JSONParse)
 - (void)parseReviewJSON:(NSDictionary *)json {
     // 递归搜索JSON中的评论数据
