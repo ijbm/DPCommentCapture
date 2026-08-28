@@ -31,8 +31,6 @@
 }
 @end
 
-// ==================== 悬浮窗前向声明 ====================
-@class DPFloatWindow;
 // ==================== 抓取管理器 ====================
 @interface DPCaptureManager : NSObject
 @property (strong,nonatomic) NSMutableArray<DPComment*> *comments;
@@ -117,8 +115,11 @@
     if (depth > 15) return;
     if (!view || view.hidden || view.alpha < 0.01) return;
 
-    // 跳过我们自己的悬浮窗
-    if ([view isKindOfClass:NSClassFromString(@"DPFloatWindow")]) return;
+    // 跳过我们自己的悬浮窗（检查windowLevel）
+    if ([view isKindOfClass:[UIWindow class]]) {
+        UIWindow *w = (UIWindow *)view;
+        if (w.windowLevel > UIWindowLevelStatusBar) return;
+    }
 
     [self extractTextsFromView:view];
 
