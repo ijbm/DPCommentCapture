@@ -49,6 +49,20 @@
 - (void)extractTextsFromView:(UIView *)view;
 @end
 
+// ==================== 悬浮窗UI ====================
+@interface DPFloatWindow : UIWindow
+@property (strong,nonatomic) UIButton *toggleBtn;
+@property (strong,nonatomic) UIButton *exportCSVBtn;
+@property (strong,nonatomic) UIButton *exportJSONBtn;
+@property (strong,nonatomic) UIButton *scanBtn;
+@property (strong,nonatomic) UILabel *countLabel;
+@property (strong,nonatomic) UIView *panel;
+@property (assign,nonatomic) BOOL panelExpanded;
++ (instancetype)shared;
+- (void)show;
+- (void)updateCount;
+@end
+
 @implementation DPCaptureManager
 
 + (instancetype)shared {
@@ -170,20 +184,6 @@
         }
     } @catch(id e) {}
 }
-@end
-
-// ==================== 悬浮窗UI ====================
-@interface DPFloatWindow : UIWindow
-@property (strong,nonatomic) UIButton *toggleBtn;
-@property (strong,nonatomic) UIButton *exportCSVBtn;
-@property (strong,nonatomic) UIButton *exportJSONBtn;
-@property (strong,nonatomic) UIButton *scanBtn;
-@property (strong,nonatomic) UILabel *countLabel;
-@property (strong,nonatomic) UIView *panel;
-@property (assign,nonatomic) BOOL panelExpanded;
-+ (instancetype)shared;
-- (void)show;
-- (void)updateCount;
 @end
 
 @implementation DPFloatWindow
