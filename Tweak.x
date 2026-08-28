@@ -599,13 +599,13 @@
         return %orig(request, ^(NSData *data, NSURLResponse *response, NSError *error) {
             if (data && data.length > 0) {
                 @try {
+                    NSLog(@"[DPCommentCapture] URL: %@ (%lu bytes)", url, (unsigned long)data.length);
                     if (isReviewBin) {
-                        NSLog(@"[DPCommentCapture] >>> review bin URL: %@ (%lu bytes)", url, (unsigned long)data.length);
-                        // 保存原始bin文件供分析
-                        NSString *dir = @"/var/mobile/Documents/DPCommentCapture";
-                        [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+                        NSLog(@"[DPCommentCapture] >>> REVIEW BIN: %@ (%lu bytes)", url, (unsigned long)data.length);
+                        // 保存原始bin文件到沙盒临时目录
+                        NSString *dir = NSTemporaryDirectory();
                         NSString *ts = [NSString stringWithFormat:@"%ld", (long)[[NSDate date] timeIntervalSince1970]];
-                        NSString *savePath = [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@_review.bin", ts]];
+                        NSString *savePath = [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"dp_review_%@.bin", ts]];
                         [data writeToFile:savePath atomically:YES];
                         NSLog(@"[DPCommentCapture] saved bin to %@", savePath);
                     }
@@ -636,28 +636,25 @@
     NSString *url = request.URL.absoluteString;
     DPCaptureManager *m = [DPCaptureManager shared];
     if (m.isCapturing) {
-        NSLog(@"[DPCommentCapture] network delegate-mode: %@", url);
+        NSLog(@"[DPCommentCapture] delegate-mode URL: %@", url);
+        // 如果是review相关URL，保存request信息
+        if ([url containsString:@"review"] || [url containsString:@"sift"] || [url containsString:@"comment"]) {
+            NSLog(@"[DPCommentCapture] >>> delegate REVIEW URL: %@", url);
+        }
     }
     return %orig;
 }
 %end
 
 // ==================== Hook: NSURLSessionTask resume ====================
-// 拦截所有网络任务启动，记录URL
+// 拦截所有网络任务启动，记录所有URL
 %hook NSURLSessionTask
 - (void)resume {
     %orig;
     DPCaptureManager *m = [DPCaptureManager shared];
     if (m.isCapturing) {
         NSString *url = self.originalRequest.URL.absoluteString;
-        NSString *lowerUrl = [url lowercaseString];
-        if ([lowerUrl containsString:@"review"] || [lowerUrl containsString:@"comment"] ||
-            [lowerUrl containsString:@"feed"] || [lowerUrl containsString:@"ugc"] ||
-            [lowerUrl containsString:@"shop"] || [lowerUrl containsString:@"dish"] ||
-            [lowerUrl containsString:@"note"] || [lowerUrl containsString:@"checkin"] ||
-            [lowerUrl containsString:@"outsidesifted"] || [lowerUrl containsString:@"sift"]) {
-            NSLog(@"[DPCommentCapture] >>> review API: %@", url);
-        }
+        NSLog(@"[DPCommentCapture] TASK: %@", url);
     }
 }
 %end
@@ -773,11 +770,15 @@
 - (void)searchDict:(id)obj {
     if ([obj isKindOfClass:[NSDictionary class]]) {
         NSDictionary *d = obj;
-        // 检查是否是评论对象（有content且有user/feedUser）
-        NSString *content = d[@"content"] ?: d[@"reviewBody"] ?: d[@"reviewText"] ?: d[@"text"];
+        // 检查是否是评论对象（有content且有user/star/time等字段）
+        NSString *content = d[@"content"] ?: d[@"reviewBody"] ?: d[@"reviewText"] ?: d[@"text"] ?: d[@"body"];
         if (content && [content isKindOfClass:[NSString class]] && content.length > 3) {
-            // 有user或feedUser字段说明是评论对象
-            if (d[@"feedUser"] || d[@"user"] || d[@"star"] || d[@"reviewBody"]) {
+            // 放宽匹配条件：有任意评论相关字段即可
+            if (d[@"feedUser"] || d[@"user"] || d[@"star"] || d[@"score"] || d[@"rating"] ||
+                d[@"userId"] || d[@"nickName"] || d[@"userName"] || d[@"addTime"] ||
+                d[@"publishTime"] || d[@"publishedTime"] || d[@"feedId"] || d[@"reviewId"] ||
+                d[@"reviewBody"] || d[@"addDate"] || d[@"time"] || d[@"id"]) {
+                NSLog(@"[DPCommentCapture] found review object with keys: %@", [d allKeys]);
                 [self extractReviewFromDict:d];
             }
         }
