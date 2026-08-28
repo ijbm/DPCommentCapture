@@ -1,0 +1,9 @@
+Package: com.dianping.dpcapture
+Name: DPCommentCapture
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Dianping comment capture tweak with floating UI
+Maintainer: Reverse Engineer
+Author: RE
+Section: Tweaks
+Depends: mobilesubstrate
