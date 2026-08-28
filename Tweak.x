@@ -974,12 +974,21 @@ static void dpProcessDecryptedData(NSData *decrypted, const char *source) {
     } @catch(id e) {}
 }
 
-// --- Hook 1: CCCrypt (一次性AES解密) ---
-%hookf(CCCryptorStatus, CCCrypt, CCOperation op, CCAlgorithm alg, CCOptions options,
-       const void *key, size_t keyLength, const void *iv,
-       const void *dataIn, size_t dataInLength,
-       void *dataOut, size_t dataOutAvailable, size_t *dataOutMoved) {
-    CCCryptorStatus ret = %orig;
+// --- C function hooks via MSHookFunction (避免Logos %hookf多行解析问题) ---
+static NSMutableSet *sDecryptCryptors = nil;
+static NSMutableDictionary *sCryptorBuffers = nil;
+
+// 原始函数指针
+static CCCryptorStatus (*orig_CCCrypt)(CCOperation, CCAlgorithm, CCOptions, const void *, size_t, const void *, const void *, size_t, void *, size_t, size_t *);
+static CCCryptorStatus (*orig_CCCryptorCreateWithMode)(CCOperation, CCMode, CCAlgorithm, CCPadding, const void *, size_t, const void *, const void *, size_t, int, CCModeOptions, CCCryptorRef *);
+static CCCryptorStatus (*orig_CCCryptorCreate)(CCOperation, CCAlgorithm, CCOptions, const void *, size_t, const void *, CCCryptorRef *);
+static CCCryptorStatus (*orig_CCCryptorUpdate)(CCCryptorRef, const void *, size_t, void *, size_t, size_t *);
+static CCCryptorStatus (*orig_CCCryptorFinal)(CCCryptorRef, void *, size_t, size_t *);
+static void (*orig_CCCryptorRelease)(CCCryptorRef);
+
+// Hook implementations
+static CCCryptorStatus hook_CCCrypt(CCOperation op, CCAlgorithm alg, CCOptions options, const void *key, size_t keyLength, const void *iv, const void *dataIn, size_t dataInLength, void *dataOut, size_t dataOutAvailable, size_t *dataOutMoved) {
+    CCCryptorStatus ret = orig_CCCrypt(op, alg, options, key, keyLength, iv, dataIn, dataInLength, dataOut, dataOutAvailable, dataOutMoved);
     if (ret == kCCSuccess && op == kCCDecrypt && dataOutMoved && *dataOutMoved > 100) {
         NSData *decrypted = [NSData dataWithBytes:dataOut length:*dataOutMoved];
         dpProcessDecryptedData(decrypted, "CCCrypt");
@@ -987,15 +996,8 @@ static void dpProcessDecryptedData(NSData *decrypted, const char *source) {
     return ret;
 }
 
-// --- Hook 2: CCCryptorCreateWithMode (多步解密-创建) ---
-// 记录解密cryptor的指针，用于Update/Final时识别
-static NSMutableSet *sDecryptCryptors = nil;
-
-%hookf(CCCryptorStatus, CCCryptorCreateWithMode, CCOperation op, CCMode mode, CCAlgorithm alg,
-       CCPadding padding, const void *key, size_t keyLength, const void *iv,
-       const void *tweak, size_t tweakLength, int numRounds, CCModeOptions options,
-       CCCryptorRef *cryptorRef) {
-    CCCryptorStatus ret = %orig;
+static CCCryptorStatus hook_CCCryptorCreateWithMode(CCOperation op, CCMode mode, CCAlgorithm alg, CCPadding padding, const void *key, size_t keyLength, const void *iv, const void *tweak, size_t tweakLength, int numRounds, CCModeOptions options, CCCryptorRef *cryptorRef) {
+    CCCryptorStatus ret = orig_CCCryptorCreateWithMode(op, mode, alg, padding, key, keyLength, iv, tweak, tweakLength, numRounds, options, cryptorRef);
     if (ret == kCCSuccess && op == kCCDecrypt && cryptorRef && *cryptorRef) {
         if (!sDecryptCryptors) sDecryptCryptors = [NSMutableSet set];
         @synchronized(sDecryptCryptors) {
@@ -1006,11 +1008,8 @@ static NSMutableSet *sDecryptCryptors = nil;
     return ret;
 }
 
-// --- Hook 3: CCCryptorCreate (简版创建) ---
-%hookf(CCCryptorStatus, CCCryptorCreate, CCOperation op, CCAlgorithm alg, CCOptions options,
-       const void *key, size_t keyLength, const void *iv,
-       CCCryptorRef *cryptorRef) {
-    CCCryptorStatus ret = %orig;
+static CCCryptorStatus hook_CCCryptorCreate(CCOperation op, CCAlgorithm alg, CCOptions options, const void *key, size_t keyLength, const void *iv, CCCryptorRef *cryptorRef) {
+    CCCryptorStatus ret = orig_CCCryptorCreate(op, alg, options, key, keyLength, iv, cryptorRef);
     if (ret == kCCSuccess && op == kCCDecrypt && cryptorRef && *cryptorRef) {
         if (!sDecryptCryptors) sDecryptCryptors = [NSMutableSet set];
         @synchronized(sDecryptCryptors) {
@@ -1021,14 +1020,8 @@ static NSMutableSet *sDecryptCryptors = nil;
     return ret;
 }
 
-// --- Hook 4: CCCryptorUpdate (多步解密-更新) ---
-// 收集每个cryptor的解密输出
-static NSMutableDictionary *sCryptorBuffers = nil;
-
-%hookf(CCCryptorStatus, CCCryptorUpdate, CCCryptorRef cryptorRef,
-       const void *dataIn, size_t dataInLength,
-       void *dataOut, size_t dataOutAvailable, size_t *dataOutMoved) {
-    CCCryptorStatus ret = %orig;
+static CCCryptorStatus hook_CCCryptorUpdate(CCCryptorRef cryptorRef, const void *dataIn, size_t dataInLength, void *dataOut, size_t dataOutAvailable, size_t *dataOutMoved) {
+    CCCryptorStatus ret = orig_CCCryptorUpdate(cryptorRef, dataIn, dataInLength, dataOut, dataOutAvailable, dataOutMoved);
     if (ret == kCCSuccess && cryptorRef && dataOutMoved && *dataOutMoved > 0) {
         BOOL isDecrypt = NO;
         if (sDecryptCryptors) {
@@ -1049,10 +1042,8 @@ static NSMutableDictionary *sCryptorBuffers = nil;
     return ret;
 }
 
-// --- Hook 5: CCCryptorFinal (多步解密-完成) ---
-%hookf(CCCryptorStatus, CCCryptorFinal, CCCryptorRef cryptorRef,
-       void *dataOut, size_t dataOutAvailable, size_t *dataOutMoved) {
-    CCCryptorStatus ret = %orig;
+static CCCryptorStatus hook_CCCryptorFinal(CCCryptorRef cryptorRef, void *dataOut, size_t dataOutAvailable, size_t *dataOutMoved) {
+    CCCryptorStatus ret = orig_CCCryptorFinal(cryptorRef, dataOut, dataOutAvailable, dataOutMoved);
     if (ret == kCCSuccess && cryptorRef) {
         BOOL isDecrypt = NO;
         if (sDecryptCryptors) {
@@ -1061,7 +1052,6 @@ static NSMutableDictionary *sCryptorBuffers = nil;
             }
         }
         if (isDecrypt) {
-            // 追加final输出
             NSMutableData *fullBuf = nil;
             @synchronized(sCryptorBuffers) {
                 NSValue *key = [NSValue valueWithPointer:cryptorRef];
@@ -1079,8 +1069,7 @@ static NSMutableDictionary *sCryptorBuffers = nil;
     return ret;
 }
 
-// --- Hook 6: CCCryptorRelease (清理) ---
-%hookf(void, CCCryptorRelease, CCCryptorRef cryptorRef) {
+static void hook_CCCryptorRelease(CCCryptorRef cryptorRef) {
     if (cryptorRef && sDecryptCryptors) {
         @synchronized(sDecryptCryptors) {
             [sDecryptCryptors removeObject:[NSValue valueWithPointer:cryptorRef]];
@@ -1089,7 +1078,7 @@ static NSMutableDictionary *sCryptorBuffers = nil;
             [sCryptorBuffers removeObjectForKey:[NSValue valueWithPointer:cryptorRef]];
         }
     }
-    %orig;
+    orig_CCCryptorRelease(cryptorRef);
 }
 
 // --- Hook 7: 运行时查找并hook ObjC解密/JSON方法 ---
@@ -1156,6 +1145,15 @@ static void dpHookObjcMethods(void) {
 
 // ==================== 入口 ====================
 %ctor {
+    // Hook C函数 via MSHookFunction
+    MSHookFunction((void *)CCCrypt, (void *)hook_CCCrypt, (void **)&orig_CCCrypt);
+    MSHookFunction((void *)CCCryptorCreateWithMode, (void *)hook_CCCryptorCreateWithMode, (void **)&orig_CCCryptorCreateWithMode);
+    MSHookFunction((void *)CCCryptorCreate, (void *)hook_CCCryptorCreate, (void **)&orig_CCCryptorCreate);
+    MSHookFunction((void *)CCCryptorUpdate, (void *)hook_CCCryptorUpdate, (void **)&orig_CCCryptorUpdate);
+    MSHookFunction((void *)CCCryptorFinal, (void *)hook_CCCryptorFinal, (void **)&orig_CCCryptorFinal);
+    MSHookFunction((void *)CCCryptorRelease, (void *)hook_CCCryptorRelease, (void **)&orig_CCCryptorRelease);
+    NSLog(@"[DPCommentCapture] C function hooks installed");
+    
     dispatch_async(dispatch_get_main_queue(), ^{
         [[DPFloatWindow shared] show];
     });
