@@ -74,7 +74,6 @@
 + (instancetype)shared;
 - (void)show;
 - (void)updateCount;
-- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event;
 @end
 
 @implementation DPCaptureManager
@@ -262,18 +261,12 @@
     }
     return self;
 }
-- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    // 只在panel范围内拦截触摸，其余穿透到下面的App
-    if (self.panel && CGRectContainsPoint(self.panel.frame, point)) {
-        return [super hitTest:point withEvent:event];
-    }
-    return nil;
-}
+// 触摸穿透已关闭 - 窗口拦截所有触摸
 - (void)makePanel {
     CGFloat sw = [UIScreen mainScreen].bounds.size.width;
     CGFloat sh = [UIScreen mainScreen].bounds.size.height;
-    // 底部条 - 全屏宽，放在屏幕底部
-    self.panel = [[UIView alloc] initWithFrame:CGRectMake(0, sh - 44, sw, 44)];
+    // 顶部条 - 全屏宽，放在屏幕顶部
+    self.panel = [[UIView alloc] initWithFrame:CGRectMake(0, 0, sw, 44)];
     self.panel.backgroundColor = [UIColor colorWithRed:0.1 green:0.5 blue:0.9 alpha:0.95];
     [self.rootViewController.view addSubview:self.panel];
 
@@ -357,18 +350,16 @@
         self.panel.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:0.95];
         self.panelExpanded = YES;
         self.clearBtn.hidden = NO;
-        // 向上展开（panel底部不动）
-        CGFloat bottom = self.panel.frame.origin.y + self.panel.frame.size.height;
-        if (bottom > sh) bottom = sh;
-        self.panel.frame = CGRectMake(0, bottom - 80, sw, 80);
+        // 展开时保持顶部位置不变
+        CGFloat top = self.panel.frame.origin.y;
+        self.panel.frame = CGRectMake(0, top, sw, 80);
     } else {
         [self.toggleBtn setTitle:@"开始抓取" forState:UIControlStateNormal];
         self.panel.backgroundColor = [UIColor colorWithRed:0.1 green:0.5 blue:0.9 alpha:0.95];
         self.panelExpanded = NO;
         self.clearBtn.hidden = YES;
-        CGFloat bottom = self.panel.frame.origin.y + self.panel.frame.size.height;
-        if (bottom > sh) bottom = sh;
-        self.panel.frame = CGRectMake(0, bottom - 44, sw, 44);
+        CGFloat top = self.panel.frame.origin.y;
+        self.panel.frame = CGRectMake(0, top, sw, 44);
     }
     [self updateCount];
 }
@@ -437,9 +428,9 @@
     CGFloat sw = [UIScreen mainScreen].bounds.size.width;
     CGFloat sh = [UIScreen mainScreen].bounds.size.height;
     self.hidden = NO;
-    // 窗口全屏，panel在底部
+    // 窗口全屏，panel在顶部
     self.frame = CGRectMake(0, 0, sw, sh);
-    self.panel.frame = CGRectMake(0, sh - 44, sw, 44);
+    self.panel.frame = CGRectMake(0, 0, sw, 44);
 }
 @end
 
