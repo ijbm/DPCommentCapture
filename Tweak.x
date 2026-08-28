@@ -70,7 +70,9 @@
 @property (strong,nonatomic) UIButton *clearBtn;
 @property (strong,nonatomic) UILabel *countLabel;
 @property (strong,nonatomic) UIView *panel;
+@property (strong,nonatomic) UIButton *collapseBtn;
 @property (assign,nonatomic) BOOL panelExpanded;
+@property (assign,nonatomic) BOOL panelCollapsed;
 + (instancetype)shared;
 - (void)show;
 - (void)updateCount;
@@ -326,9 +328,51 @@
     [self.clearBtn addTarget:self action:@selector(onClear) forControlEvents:UIControlEventTouchUpInside];
     [self.panel addSubview:self.clearBtn];
 
+    // 收缩/展开按钮（右侧小圆点）
+    self.collapseBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.collapseBtn.frame = CGRectMake(sw - 36, 0, 36, 44);
+    [self.collapseBtn setTitle:@"›" forState:UIControlStateNormal];
+    [self.collapseBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    self.collapseBtn.titleLabel.font = [UIFont boldSystemFontOfSize:20];
+    [self.collapseBtn addTarget:self action:@selector(onCollapse) forControlEvents:UIControlEventTouchUpInside];
+    [self.panel addSubview:self.collapseBtn];
+
     // 拖动手势（仅垂直拖动）
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(onPan:)];
     [self.panel addGestureRecognizer:pan];
+}
+- (void)onCollapse {
+    CGFloat sw = [UIScreen mainScreen].bounds.size.width;
+    CGFloat top = self.panel.frame.origin.y;
+    if (!self.panelCollapsed) {
+        // 收缩：只显示一个小圆点
+        self.panelCollapsed = YES;
+        self.panel.frame = CGRectMake(sw - 44, top, 44, 44);
+        self.panel.layer.cornerRadius = 22;
+        self.panel.layer.masksToBounds = YES;
+        self.toggleBtn.hidden = YES;
+        self.countLabel.hidden = YES;
+        self.scanBtn.hidden = YES;
+        self.exportCSVBtn.hidden = YES;
+        self.exportJSONBtn.hidden = YES;
+        self.clearBtn.hidden = YES;
+        [self.collapseBtn setTitle:@"‹" forState:UIControlStateNormal];
+        [self.collapseBtn setFrame:CGRectMake(0, 0, 44, 44)];
+    } else {
+        // 展开：恢复全宽
+        self.panelCollapsed = NO;
+        self.panel.frame = CGRectMake(0, top, sw, self.panelExpanded ? 80 : 44);
+        self.panel.layer.cornerRadius = 0;
+        self.panel.layer.masksToBounds = NO;
+        self.toggleBtn.hidden = NO;
+        self.countLabel.hidden = NO;
+        self.scanBtn.hidden = NO;
+        self.exportCSVBtn.hidden = NO;
+        self.exportJSONBtn.hidden = NO;
+        if (self.panelExpanded) self.clearBtn.hidden = NO;
+        [self.collapseBtn setTitle:@"›" forState:UIControlStateNormal];
+        [self.collapseBtn setFrame:CGRectMake(sw - 36, 0, 36, 44)];
+    }
 }
 - (void)onPan:(UIPanGestureRecognizer *)g {
     CGPoint t = [g translationInView:self];
