@@ -219,7 +219,8 @@
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     @try {
-        NSString *title = [[self valueForKey:@"navigationItem"] title];
+        UINavigationItem *navItem = [(UIViewController *)self navigationItem];
+        NSString *title = navItem.title;
         if (title.length > 0) {
             [[DPCaptureManager shared] setCurrentShopName:title];
         }
@@ -232,7 +233,8 @@
 - (void)viewDidLoad {
     %orig;
     @try {
-        NSString *title = [[self valueForKey:@"navigationItem"] title];
+        UINavigationItem *navItem = [(UIViewController *)self navigationItem];
+        NSString *title = navItem.title;
         if (title.length > 0) {
             [[DPCaptureManager shared] setCurrentShopName:title];
         }
@@ -307,7 +309,11 @@
                 @try {
                     NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
                     if (json) {
-                        [[DPCaptureManager shared] performSelector:NSSelectorFromString(@"parseReviewJSON:") withObject:json];
+                        SEL sel = NSSelectorFromString(@"parseReviewJSON:");
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                        [[DPCaptureManager shared] performSelector:sel withObject:json];
+#pragma clang diagnostic pop
                     }
                 } @catch(id e) {}
             }
