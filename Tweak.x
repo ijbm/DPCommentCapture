@@ -95,9 +95,44 @@
     [self.comments addObject:c];
 }
 
+- (BOOL)isNoiseText:(NSString *)text {
+    // 排除UI标签、价格、日期等噪声文本
+    if (text.length < 15) return YES; // 评论内容至少15字
+    if ([text hasPrefix:@"¥"] || [text hasPrefix:@"￥"]) return YES;
+    if ([text containsString:@"发布于"]) return YES;
+    if ([text containsString:@"搜索"]) return YES;
+    if ([text containsString:@"查看全部"] || [text containsString:@"查看更多"]) return YES;
+    if ([text containsString:@"说点什么"]) return YES;
+    if ([text containsString:@"继续上滑"] || [text containsString:@"松手后"]) return YES;
+    if ([text containsString:@"已为你跳转"]) return YES;
+    if ([text containsString:@"AI结合"] || [text containsString:@"上百种模型"]) return YES;
+    if ([text containsString:@"带图/视频"] || [text containsString:@"搜索评价"]) return YES;
+    if ([text containsString:@"当前为您定位"] || [text containsString:@"看完啦"]) return YES;
+    if ([text containsString:@"星级分排名"] || [text containsString:@"近30天"]) return YES;
+    if ([text containsString:@"当前客流"] || [text containsString:@"行李寄存"]) return YES;
+    if ([text containsString:@"月售"] || [text containsString:@"满2人"]) return YES;
+    if ([text containsString:@"最多50人"] || [text containsString:@"最多20人"]) return YES;
+    if ([text containsString:@"比单买省"] || [text containsString:@"立减"]) return YES;
+    if ([text containsString:@"距景点"] || [text containsString:@"低价房"]) return YES;
+    if ([text containsString:@"30天低价"] || [text containsString:@"新开业"]) return YES;
+    if ([text containsString:@"万+消费"] || [text containsString:@"消费"]) return YES;
+    // 纯日期格式
+    NSRegularExpression *dateRe = [NSRegularExpression regularExpressionWithPattern:@"^\\d{4}年\\d{1,2}月\\d{1,2}日$" options:0 error:nil];
+    if ([dateRe firstMatchInString:text options:0 range:NSMakeRange(0, text.length)]) return YES;
+    // 纯数字+条
+    if ([text hasSuffix:@"条"] && text.length < 10) return YES;
+    // 纯英文用户名（短）
+    if (text.length < 20 && [text rangeOfCharacterFromSet:[NSCharacterSet letterCharacterSet]].length == text.length) return YES;
+    return NO;
+}
+
 - (void)addText:(NSString *)text source:(NSString *)src {
     if (!self.isCapturing || text.length < 5) return;
     if ([self.seenTexts containsObject:text]) return;
+    // UILabel/UITextView文本需要过滤噪声
+    if ([src hasPrefix:@"UILabel"] || [src hasPrefix:@"UITextView"] || [src hasPrefix:@"KVC"]) {
+        if ([self isNoiseText:text]) return;
+    }
     [self.seenTexts addObject:text];
     DPComment *c = [DPComment new];
     c.content = text;
@@ -441,13 +476,12 @@
 }
 %end
 
-// ==================== Hook: UILabel 无过滤抓取 ====================
+// ==================== Hook: UILabel 带过滤抓取 ====================
 %hook UILabel
 - (void)setText:(NSString *)text {
     %orig;
     DPCaptureManager *m = [DPCaptureManager shared];
-    if (!m.isCapturing || text.length < 5) return;
-    // 不再检查superview，直接抓取所有文本
+    if (!m.isCapturing || text.length < 15) return;
     [m addText:text source:@"UILabel"];
     [[DPFloatWindow shared] updateCount];
 }
@@ -456,7 +490,7 @@
     DPCaptureManager *m = [DPCaptureManager shared];
     if (!m.isCapturing) return;
     NSString *text = attrText.string;
-    if (text.length > 5) {
+    if (text.length > 15) {
         [m addText:text source:@"UILabel_Attr"];
         [[DPFloatWindow shared] updateCount];
     }
@@ -502,53 +536,71 @@
     NSString *url = request.URL.absoluteString;
     DPCaptureManager *m = [DPCaptureManager shared];
     if (m.isCapturing) {
-        NSString *lowerUrl = [url lowercaseString];
-        // 精确匹配浏览器扩展的API目标
-        if ([lowerUrl containsString:@"outsidesiftedreviewlist"] ||
-            [lowerUrl containsString:@"reviewlist"] ||
-            [lowerUrl containsString:@"ugcdetail"] ||
-            [lowerUrl containsString:@"feeddetail"] ||
-            [lowerUrl containsString:@"shopreviewlist"] ||
-            [lowerUrl containsString:@"dishreviewlist"] ||
-            [lowerUrl containsString:@"extrareviewlist"] ||
-            [lowerUrl containsString:@"commentlist"]) {
-
-            return %orig(request, ^(NSData *data, NSURLResponse *response, NSError *error) {
-                if (data && data.length > 0) {
-                    @try {
-                        // 先尝试JSON
-                        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-                        if (json) {
-                            SEL sel = NSSelectorFromString(@"parseReviewJSON:");
+        // 对所有请求都尝试拦截，不过滤URL
+        return %orig(request, ^(NSData *data, NSURLResponse *response, NSError *error) {
+            if (data && data.length > 0) {
+                @try {
+                    // 先尝试JSON
+                    id json = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingAllowFragments error:nil];
+                    if (json) {
+                        SEL sel = NSSelectorFromString(@"parseReviewJSON:");
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                            [m performSelector:sel withObject:json];
+                        [m performSelector:sel withObject:json];
 #pragma clang diagnostic pop
-                        }
-                        // 无论JSON是否成功，都尝试从二进制中提取字符串
-                        SEL sel2 = NSSelectorFromString(@"extractStringsFromData:");
+                    }
+                    // 无论JSON是否成功，都尝试从二进制中提取字符串
+                    SEL sel2 = NSSelectorFromString(@"extractStringsFromData:");
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                        [m performSelector:sel2 withObject:data];
+                    [m performSelector:sel2 withObject:data];
 #pragma clang diagnostic pop
-                    } @catch(id e) {}
-                }
-                handler(data, response, error);
-            });
-        }
+                } @catch(id e) {}
+            }
+            handler(data, response, error);
+        });
+    }
+    return %orig;
+}
+// 也hook无completionHandler的版本（delegate模式）
+- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request {
+    NSString *url = request.URL.absoluteString;
+    DPCaptureManager *m = [DPCaptureManager shared];
+    if (m.isCapturing) {
+        NSLog(@"[DPCommentCapture] network delegate-mode: %@", url);
     }
     return %orig;
 }
 %end
 
+// ==================== Hook: NSURLSessionTask resume ====================
+// 拦截所有网络任务启动，记录URL
+%hook NSURLSessionTask
+- (void)resume {
+    %orig;
+    DPCaptureManager *m = [DPCaptureManager shared];
+    if (m.isCapturing) {
+        NSString *url = self.originalRequest.URL.absoluteString;
+        NSString *lowerUrl = [url lowercaseString];
+        if ([lowerUrl containsString:@"review"] || [lowerUrl containsString:@"comment"] ||
+            [lowerUrl containsString:@"feed"] || [lowerUrl containsString:@"ugc"] ||
+            [lowerUrl containsString:@"shop"] || [lowerUrl containsString:@"dish"] ||
+            [lowerUrl containsString:@"note"] || [lowerUrl containsString:@"checkin"] ||
+            [lowerUrl containsString:@"outsidesifted"] || [lowerUrl containsString:@"sift"]) {
+            NSLog(@"[DPCommentCapture] >>> review API: %@", url);
+        }
+    }
+}
+%end
+
 // ==================== DPCaptureManager 扩展: JSON解析 + 二进制提取 ====================
 @interface DPCaptureManager (Ext)
-- (void)parseReviewJSON:(NSDictionary *)json;
+- (void)parseReviewJSON:(id)json;
 - (void)extractStringsFromData:(NSData *)data;
 @end
 
 @implementation DPCaptureManager (Ext)
-- (void)parseReviewJSON:(NSDictionary *)json {
+- (void)parseReviewJSON:(id)json {
     // 参考浏览器扩展的解析逻辑
     // 1. 先找数组：list / data / reviews / result / 第一个对象数组
     NSArray *list = nil;
@@ -560,6 +612,8 @@
         else if ([d[@"data"] isKindOfClass:[NSArray class]]) list = d[@"data"];
         else if ([d[@"reviews"] isKindOfClass:[NSArray class]]) list = d[@"reviews"];
         else if ([d[@"result"] isKindOfClass:[NSArray class]]) list = d[@"result"];
+        else if ([d[@"reviewList"] isKindOfClass:[NSArray class]]) list = d[@"reviewList"];
+        else if ([d[@"feedList"] isKindOfClass:[NSArray class]]) list = d[@"feedList"];
         else {
             // 搜索第一个对象数组
             for (NSString *key in d) {
@@ -578,6 +632,7 @@
         }
     }
     if (list) {
+        NSLog(@"[DPCommentCapture] found list with %lu items", (unsigned long)list.count);
         for (id item in list) {
             if ([item isKindOfClass:[NSDictionary class]]) {
                 [self extractReviewFromDict:item];
@@ -741,5 +796,5 @@
     dispatch_async(dispatch_get_main_queue(), ^{
         [[DPFloatWindow shared] show];
     });
-    NSLog(@"[DPCommentCapture] v2 loaded for Dianping");
+    NSLog(@"[DPCommentCapture] v4 loaded for Dianping");
 }
