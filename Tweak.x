@@ -533,7 +533,6 @@
 // ==================== Hook: NSURLSession 抓取网络数据 ====================
 %hook NSURLSession
 - (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))handler {
-    NSString *url = request.URL.absoluteString;
     DPCaptureManager *m = [DPCaptureManager shared];
     if (m.isCapturing) {
         // 对所有请求都尝试拦截，不过滤URL
