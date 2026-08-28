@@ -31,6 +31,8 @@
 }
 @end
 
+// ==================== 悬浮窗前向声明 ====================
+@class DPFloatWindow;
 // ==================== 抓取管理器 ====================
 @interface DPCaptureManager : NSObject
 @property (strong,nonatomic) NSMutableArray<DPComment*> *comments;
@@ -116,7 +118,7 @@
     if (!view || view.hidden || view.alpha < 0.01) return;
 
     // 跳过我们自己的悬浮窗
-    if ([view isKindOfClass:[DPFloatWindow class]]) return;
+    if ([view isKindOfClass:NSClassFromString(@"DPFloatWindow")]) return;
 
     [self extractTextsFromView:view];
 
@@ -398,7 +400,7 @@
     static dispatch_once_t onceToken;
     static dispatch_queue_t scanQueue;
     dispatch_once(&onceToken, ^{ scanQueue = dispatch_queue_create("dp.scan", DISPATCH_QUEUE_SERIAL); });
-    static __block int skipCount = 0;
+    static int skipCount = 0;
     skipCount++;
     if (skipCount < 10) return;
     skipCount = 0;
@@ -424,7 +426,7 @@
             if (data && data.length > 0) {
                 @try {
                     // 先尝试JSON
-                    NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:NSJSONWritingPrettyPrinted error:nil];
+                    NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
                     if (json) {
                         SEL sel = NSSelectorFromString(@"parseReviewJSON:");
 #pragma clang diagnostic push
@@ -433,7 +435,11 @@
 #pragma clang diagnostic pop
                     }
                     // 无论JSON是否成功，都尝试从二进制中提取字符串
-                    [m performSelector:NSSelectorFromString(@"extractStringsFromData:") withObject:data];
+                    SEL sel2 = NSSelectorFromString(@"extractStringsFromData:");
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                    [m performSelector:sel2 withObject:data];
+#pragma clang diagnostic pop
                 } @catch(id e) {}
             }
             handler(data, response, error);
