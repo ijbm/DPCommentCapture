@@ -8,12 +8,18 @@
 // ==================== 评论数据模型 ====================
 @interface DPComment : NSObject
 @property (copy,nonatomic) NSString *author;
+@property (copy,nonatomic) NSString *userId;
 @property (copy,nonatomic) NSString *content;
 @property (copy,nonatomic) NSString *rating;
 @property (copy,nonatomic) NSString *date;
 @property (copy,nonatomic) NSString *shopName;
 @property (copy,nonatomic) NSString *commentId;
 @property (copy,nonatomic) NSString *source;
+@property (copy,nonatomic) NSString *avatar;
+@property (copy,nonatomic) NSString *shareUrl;
+@property (copy,nonatomic) NSString *recommendText;
+@property (copy,nonatomic) NSString *mediaUrls;
+@property (assign,nonatomic) int mediaCount;
 - (NSDictionary *)toDictionary;
 @end
 
@@ -21,12 +27,18 @@
 - (NSDictionary *)toDictionary {
     return @{
         @"author": self.author ?: @"",
+        @"userId": self.userId ?: @"",
         @"content": self.content ?: @"",
         @"rating": self.rating ?: @"",
         @"date": self.date ?: @"",
         @"shopName": self.shopName ?: @"",
         @"commentId": self.commentId ?: @"",
-        @"source": self.source ?: @""
+        @"source": self.source ?: @"",
+        @"avatar": self.avatar ?: @"",
+        @"shareUrl": self.shareUrl ?: @"",
+        @"recommendText": self.recommendText ?: @"",
+        @"mediaUrls": self.mediaUrls ?: @"",
+        @"mediaCount": @(self.mediaCount)
     };
 }
 @end
@@ -97,14 +109,22 @@
 - (void)clear { [self.comments removeAllObjects]; [self.seenTexts removeAllObjects]; }
 
 - (NSString *)exportCSV {
-    NSMutableString *s = [NSMutableString stringWithString:@"作者,评分,日期,商家,评论ID,来源,内容\n"];
+    NSMutableString *s = [NSMutableString stringWithString:@"\uFEFF序号,用户ID,用户名,头像,评分,发布时间,商家,评论ID,来源,内容,分享链接,推荐文本,媒体数量,媒体链接\n"];
+    int idx = 0;
     for (DPComment *c in self.comments) {
-        NSString *content = [c.content stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
-        content = [content stringByReplacingOccurrencesOfString:@"," withString:@"，"];
-        [s appendFormat:@"%@,%@,%@,%@,%@,%@,%@\n",
-            c.author ?: @"",c.rating ?: @"",c.date ?: @"",
-            c.shopName ?: @"",c.commentId ?: @"",
-            c.source ?: @"",content];
+        idx++;
+        NSString *content = c.content ?: @"";
+        content = [content stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+        content = [content stringByReplacingOccurrencesOfString:@"\"" withString:@"\"\""];
+        NSString *author = [c.author stringByReplacingOccurrencesOfString:@"\"" withString:@"\"\""] ?: @"";
+        NSString *shop = [c.shopName stringByReplacingOccurrencesOfString:@"\"" withString:@"\"\""] ?: @"";
+        NSString *rec = [c.recommendText stringByReplacingOccurrencesOfString:@"\"" withString:@"\"\""] ?: @"";
+        NSString *media = [c.mediaUrls stringByReplacingOccurrencesOfString:@"\"" withString:@"\"\""] ?: @"";
+        [s appendFormat:@"%d,\"%@\",\"%@\",\"%@\",\"%@\",\"%@\",\"%@\",\"%@\",\"%@\",\"%@\",\"%@\",\"%@\",%d,\"%@\"\n",
+            idx, c.userId ?: @"", author, c.avatar ?: @"",
+            c.rating ?: @"", c.date ?: @"", shop,
+            c.commentId ?: @"", c.source ?: @"", content,
+            c.shareUrl ?: @"", rec, c.mediaCount, media];
     }
     return s;
 }
@@ -463,10 +483,17 @@
 - (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))handler {
     NSString *url = request.URL.absoluteString;
     DPCaptureManager *m = [DPCaptureManager shared];
-    if (m.isCapturing && ([url containsString:@"review"] || [url containsString:@"comment"] ||
-         [url containsString:@"feed"] || [url containsString:@"ugc"] ||
-         [url containsString:@"checkin"] || [url containsString:@"note"] ||
-         [url containsString:@"shop"] || [url containsString:@"dish"])) {
+    if (m.isCapturing) {
+        NSString *lowerUrl = [url lowercaseString];
+        // 精确匹配浏览器扩展的API目标
+        if ([lowerUrl containsString:@"outsidesiftedreviewlist"] ||
+            [lowerUrl containsString:@"reviewlist"] ||
+            [lowerUrl containsString:@"ugcdetail"] ||
+            [lowerUrl containsString:@"feeddetail"] ||
+            [lowerUrl containsString:@"shopreviewlist"] ||
+            [lowerUrl containsString:@"dishreviewlist"] ||
+            [lowerUrl containsString:@"extrareviewlist"] ||
+            [lowerUrl containsString:@"commentlist"]) {
 
         return %orig(request, ^(NSData *data, NSURLResponse *response, NSError *error) {
             if (data && data.length > 0) {
@@ -503,23 +530,94 @@
 
 @implementation DPCaptureManager (Ext)
 - (void)parseReviewJSON:(NSDictionary *)json {
-    [self searchDict:json];
+    // 参考浏览器扩展的解析逻辑
+    // 1. 先找数组：list / data / reviews / result / 第一个对象数组
+    NSArray *list = nil;
+    if ([json isKindOfClass:[NSArray class]]) {
+        list = (NSArray *)json;
+    } else if ([json isKindOfClass:[NSDictionary class]]) {
+        NSDictionary *d = (NSDictionary *)json;
+        if ([d[@"list"] isKindOfClass:[NSArray class]]) list = d[@"list"];
+        else if ([d[@"data"] isKindOfClass:[NSArray class]]) list = d[@"data"];
+        else if ([d[@"reviews"] isKindOfClass:[NSArray class]]) list = d[@"reviews"];
+        else if ([d[@"result"] isKindOfClass:[NSArray class]]) list = d[@"result"];
+        else {
+            // 搜索第一个对象数组
+            for (NSString *key in d) {
+                id val = d[key];
+                if ([val isKindOfClass:[NSArray class]] && [(NSArray *)val count] > 0 &&
+                    [[(NSArray *)val firstObject] isKindOfClass:[NSDictionary class]]) {
+                    list = val;
+                    break;
+                }
+            }
+        }
+        // 如果没找到数组，递归搜索
+        if (!list) {
+            [self searchDict:json];
+            return;
+        }
+    }
+    if (list) {
+        for (id item in list) {
+            if ([item isKindOfClass:[NSDictionary class]]) {
+                [self extractReviewFromDict:item];
+            }
+        }
+    }
+}
+- (void)extractReviewFromDict:(NSDictionary *)r {
+    // 参考浏览器扩展的字段映射
+    NSDictionary *user = r[@"feedUser"] ?: r[@"user"] ?: @{};
+    if (![user isKindOfClass:[NSDictionary class]]) user = @{};
+    
+    NSString *content = r[@"content"] ?: r[@"reviewBody"] ?: r[@"text"] ?: r[@"reviewText"] ?: @"";
+    if (![content isKindOfClass:[NSString class]] || content.length < 2) return;
+    
+    DPComment *c = [DPComment new];
+    c.content = content;
+    c.userId = [NSString stringWithFormat:@"%@", user[@"userId"] ?: @""];
+    c.author = user[@"userName"] ?: user[@"nickName"] ?: user[@"name"] ?: @"";
+    c.avatar = user[@"avatar"] ?: @"";
+    c.rating = [NSString stringWithFormat:@"%@", r[@"star"] ?: r[@"score"] ?: r[@"rating"] ?: @""];
+    c.date = r[@"time"] ?: r[@"addTime"] ?: r[@"addDate"] ?: r[@"publishTime"] ?: r[@"publishedTime"] ?: @"";
+    c.commentId = [NSString stringWithFormat:@"%@", r[@"id"] ?: r[@"reviewId"] ?: r[@"feedId"] ?: @""];
+    c.shareUrl = r[@"shareUrl"] ?: @"";
+    c.recommendText = r[@"recommendText"] ?: @"";
+    c.source = @"network_json";
+    
+    // 媒体信息
+    NSArray *pictures = r[@"pictures"];
+    if ([pictures isKindOfClass:[NSArray class]]) {
+        c.mediaCount = (int)pictures.count;
+        NSMutableArray *urls = [NSMutableArray array];
+        for (id pic in pictures) {
+            if ([pic isKindOfClass:[NSDictionary class]]) {
+                NSDictionary *p = pic;
+                int ptype = [p[@"type"] intValue];
+                if (ptype == 4) {
+                    [urls addObject:[NSString stringWithFormat:@"视频:%@", p[@"livePicVideoUrl"] ?: @"N/A"]];
+                } else {
+                    [urls addObject:[NSString stringWithFormat:@"图片:%@", p[@"bigUrl"] ?: @"N/A"]];
+                }
+            }
+        }
+        if (urls.count > 0) c.mediaUrls = [urls componentsJoinedByString:@"; "];
+    }
+    
+    [self addComment:c];
+    [[DPFloatWindow shared] updateCount];
 }
 - (void)searchDict:(id)obj {
     if ([obj isKindOfClass:[NSDictionary class]]) {
         NSDictionary *d = obj;
-        // 检查这个字典本身是否是评论
-        NSString *content = d[@"content"] ?: d[@"reviewText"] ?: d[@"body"] ?: d[@"text"] ?: d[@"reviewBody"];
+        // 检查是否是评论对象（有content且有user/feedUser）
+        NSString *content = d[@"content"] ?: d[@"reviewBody"] ?: d[@"reviewText"] ?: d[@"text"];
         if (content && [content isKindOfClass:[NSString class]] && content.length > 3) {
-            DPComment *c = [DPComment new];
-            c.content = content;
-            c.author = d[@"userName"] ?: d[@"author"] ?: d[@"nickName"] ?: d[@"userNick"] ?: d[@"userNameStr"] ?: @"";
-            c.rating = [NSString stringWithFormat:@"%@", d[@"score"] ?: d[@"star"] ?: d[@"rating"] ?: d[@"reviewStar"] ?: @""];
-            c.date = d[@"date"] ?: d[@"createTime"] ?: d[@"publishedTime"] ?: d[@"publishTime"] ?: @"";
-            c.commentId = [NSString stringWithFormat:@"%@", d[@"id"] ?: d[@"reviewId"] ?: d[@"feedId"] ?: @""];
-            c.source = @"network_json";
-            [self addComment:c];
-            [[DPFloatWindow shared] updateCount];
+            // 有user或feedUser字段说明是评论对象
+            if (d[@"feedUser"] || d[@"user"] || d[@"star"] || d[@"reviewBody"]) {
+                [self extractReviewFromDict:d];
+            }
         }
         for (NSString *k in d) {
             [self searchDict:d[k]];
