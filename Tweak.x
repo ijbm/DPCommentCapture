@@ -55,6 +55,7 @@
 @property (strong,nonatomic) UIButton *exportCSVBtn;
 @property (strong,nonatomic) UIButton *exportJSONBtn;
 @property (strong,nonatomic) UIButton *scanBtn;
+@property (strong,nonatomic) UIButton *clearBtn;
 @property (strong,nonatomic) UILabel *countLabel;
 @property (strong,nonatomic) UIView *panel;
 @property (assign,nonatomic) BOOL panelExpanded;
@@ -257,6 +258,17 @@
     [self.exportJSONBtn addTarget:self action:@selector(onExportJSON) forControlEvents:UIControlEventTouchUpInside];
     [self.panel addSubview:self.exportJSONBtn];
 
+    // 清空按钮
+    self.clearBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.clearBtn.frame = CGRectMake(0,118,90,24);
+    [self.clearBtn setTitle:@"清空" forState:UIControlStateNormal];
+    [self.clearBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    self.clearBtn.titleLabel.font = [UIFont systemFontOfSize:12];
+    self.clearBtn.backgroundColor = [UIColor colorWithRed:0.5 green:0.1 blue:0.1 alpha:0.95];
+    self.clearBtn.hidden = YES;
+    [self.clearBtn addTarget:self action:@selector(onClear) forControlEvents:UIControlEventTouchUpInside];
+    [self.panel addSubview:self.clearBtn];
+
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(onPan:)];
     [self.panel addGestureRecognizer:pan];
 }
@@ -276,8 +288,9 @@
         self.scanBtn.hidden = NO;
         self.exportCSVBtn.hidden = NO;
         self.exportJSONBtn.hidden = NO;
-        self.panel.frame = CGRectMake(0,0,90,118);
-        self.frame = CGRectMake(self.frame.origin.x, self.frame.origin.y, 90, 118);
+        self.clearBtn.hidden = NO;
+        self.panel.frame = CGRectMake(0,0,90,142);
+        self.frame = CGRectMake(self.frame.origin.x, self.frame.origin.y, 90, 142);
     } else {
         [self.toggleBtn setTitle:@"开始" forState:UIControlStateNormal];
         self.panel.backgroundColor = [UIColor colorWithRed:0.1 green:0.5 blue:0.9 alpha:0.95];
@@ -286,6 +299,7 @@
         self.scanBtn.hidden = YES;
         self.exportCSVBtn.hidden = YES;
         self.exportJSONBtn.hidden = YES;
+        self.clearBtn.hidden = YES;
         self.panel.frame = CGRectMake(0,0,90,44);
         self.frame = CGRectMake(self.frame.origin.x, self.frame.origin.y, 90, 44);
     }
@@ -302,22 +316,55 @@
 }
 - (void)onExportCSV {
     NSString *csv = [[DPCaptureManager shared] exportCSV];
-    [self saveFile:csv name:@"dianping_comments.csv"];
+    [self shareFile:csv name:@"dianping_comments.csv"];
 }
 - (void)onExportJSON {
     NSString *json = [[DPCaptureManager shared] exportJSON];
-    [self saveFile:json name:@"dianping_comments.json"];
+    [self shareFile:json name:@"dianping_comments.json"];
 }
-- (void)saveFile:(NSString *)content name:(NSString *)name {
-    NSString *dir = @"/var/mobile/Documents/DPCommentCapture";
-    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
-    NSString *ts = [NSString stringWithFormat:@"%ld", (long)[[NSDate date] timeIntervalSince1970]];
-    NSString *path = [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@_%@", ts, name]];
-    [content writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"导出成功" message:path preferredStyle:UIAlertControllerStyleAlert];
-    [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+- (void)onClear {
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"清空确认" message:[NSString stringWithFormat:@"确认清空 %lu 条评论？", (unsigned long)[DPCaptureManager shared].comments.count] preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [a addAction:[UIAlertAction actionWithTitle:@"清空" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        [[DPCaptureManager shared] clear];
+        [self updateCount];
+    }]];
     [[self rootViewController] presentViewController:a animated:YES completion:nil];
-    [self updateCount];
+}
+- (void)shareFile:(NSString *)content name:(NSString *)name {
+    if ([DPCaptureManager shared].comments.count == 0) {
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"无数据" message:@"没有可导出的评论" preferredStyle:UIAlertControllerStyleAlert];
+        [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [[self rootViewController] presentViewController:a animated:YES completion:nil];
+        return;
+    }
+    // 写入临时文件
+    NSString *tmpDir = NSTemporaryDirectory();
+    NSString *ts = [NSString stringWithFormat:@"%ld", (long)[[NSDate date] timeIntervalSince1970]];
+    NSString *fileName = [NSString stringWithFormat:@"%@_%@", ts, name];
+    NSString *filePath = [tmpDir stringByAppendingPathComponent:fileName];
+    [content writeToFile:filePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+    // 用系统分享面板让用户选择保存位置
+    NSURL *fileURL = [NSURL fileURLWithPath:filePath];
+    UIActivityViewController *activityVC = [[UIActivityViewController alloc] initWithActivityItems:@[fileURL] applicationActivities:nil];
+    activityVC.completionWithItemsHandler = ^(NSString *activityType, BOOL completed, NSArray *returnedItems, NSError *activityError) {
+        if (completed) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                UIAlertController *a = [UIAlertController alertControllerWithTitle:@"导出成功" message:[NSString stringWithFormat:@"已通过 %@ 导出", activityType ?: @"分享"] preferredStyle:UIAlertControllerStyleAlert];
+                [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                [[self rootViewController] presentViewController:a animated:YES completion:nil];
+            });
+        }
+        // 清理临时文件
+        [[NSFileManager defaultManager] removeItemAtPath:filePath error:nil];
+    };
+    // 在iPad上需要popover
+    if ([activityVC respondsToSelector:@selector(popoverPresentationController)]) {
+        activityVC.popoverPresentationController.sourceView = self.panel;
+        activityVC.popoverPresentationController.sourceRect = self.panel.bounds;
+    }
+    [[self rootViewController] presentViewController:activityVC animated:YES completion:nil];
 }
 - (void)show {
     self.hidden = NO;
