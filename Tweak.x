@@ -594,13 +594,28 @@
 %end
 
 // ==================== Hook: NSURLSession 抓取网络数据 ====================
+// 记录URL到日志文件（C函数）
+static void dpLogURL(NSString *url, NSString *method, NSUInteger size) {
+    dispatch_async(dispatch_get_global_queue(0,0), ^{
+        NSString *dir = NSTemporaryDirectory();
+        NSString *path = [dir stringByAppendingPathComponent:@"dp_network_log.txt"];
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSMutableString *log = [NSMutableString string];
+        if ([fm fileExistsAtPath:path]) {
+            NSString *old = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+            if (old) [log appendString:old];
+        }
+        [log appendFormat:@"%@ %@ %lu\n", method ?: @"GET", url ?: @"", (unsigned long)size];
+        [log writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    });
+}
 %hook NSURLSession
 - (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))handler {
     DPCaptureManager *m = [DPCaptureManager shared];
     NSString *url = request.URL.absoluteString;
     if (m.isCapturing) {
         // 记录所有URL到日志文件
-        [self logURL:url method:request.HTTPMethod size:0];
+        dpLogURL(url, request.HTTPMethod, 0);
         // 只对非review请求做JSON拦截，避免干扰review bin请求
         BOOL isReviewBin = [url containsString:@"outsidesiftedreviewlist"] ||
                            [url containsString:@"reviewlist"];
@@ -621,7 +636,7 @@
                 handler(data, response, error);
             });
         } else {
-            // review bin请求：不修改handler，只记录URL和响应大小
+            // review bin请求：不修改handler，只记录URL
             NSLog(@"[DPCommentCapture] >>> REVIEW BIN (no hook): %@", url);
             return %orig;
         }
@@ -634,27 +649,12 @@
     DPCaptureManager *m = [DPCaptureManager shared];
     if (m.isCapturing) {
         NSLog(@"[DPCommentCapture] delegate-mode URL: %@", url);
-        [self logURL:url method:request.HTTPMethod size:0];
+        dpLogURL(url, request.HTTPMethod, 0);
         if ([url containsString:@"review"] || [url containsString:@"sift"] || [url containsString:@"comment"]) {
             NSLog(@"[DPCommentCapture] >>> delegate REVIEW URL: %@", url);
         }
     }
     return %orig;
-}
-// 记录URL到日志文件
-- (void)logURL:(NSString *)url method:(NSString *)method size:(NSUInteger)size {
-    dispatch_async(dispatch_get_global_queue(0,0), ^{
-        NSString *dir = NSTemporaryDirectory();
-        NSString *path = [dir stringByAppendingPathComponent:@"dp_network_log.txt"];
-        NSFileManager *fm = [NSFileManager defaultManager];
-        NSMutableString *log = [NSMutableString string];
-        if ([fm fileExistsAtPath:path]) {
-            NSString *old = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
-            if (old) [log appendString:old];
-        }
-        [log appendFormat:@"%@ %@ %lu\n", method ?: @"GET", url ?: @"", (unsigned long)size];
-        [log writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    });
 }
 %end
 
