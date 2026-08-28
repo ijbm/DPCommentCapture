@@ -495,28 +495,29 @@
             [lowerUrl containsString:@"extrareviewlist"] ||
             [lowerUrl containsString:@"commentlist"]) {
 
-        return %orig(request, ^(NSData *data, NSURLResponse *response, NSError *error) {
-            if (data && data.length > 0) {
-                @try {
-                    // 先尝试JSON
-                    NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-                    if (json) {
-                        SEL sel = NSSelectorFromString(@"parseReviewJSON:");
+            return %orig(request, ^(NSData *data, NSURLResponse *response, NSError *error) {
+                if (data && data.length > 0) {
+                    @try {
+                        // 先尝试JSON
+                        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+                        if (json) {
+                            SEL sel = NSSelectorFromString(@"parseReviewJSON:");
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                        [m performSelector:sel withObject:json];
+                            [m performSelector:sel withObject:json];
 #pragma clang diagnostic pop
-                    }
-                    // 无论JSON是否成功，都尝试从二进制中提取字符串
-                    SEL sel2 = NSSelectorFromString(@"extractStringsFromData:");
+                        }
+                        // 无论JSON是否成功，都尝试从二进制中提取字符串
+                        SEL sel2 = NSSelectorFromString(@"extractStringsFromData:");
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                    [m performSelector:sel2 withObject:data];
+                        [m performSelector:sel2 withObject:data];
 #pragma clang diagnostic pop
-                } @catch(id e) {}
-            }
-            handler(data, response, error);
-        });
+                    } @catch(id e) {}
+                }
+                handler(data, response, error);
+            });
+        }
     }
     return %orig;
 }
