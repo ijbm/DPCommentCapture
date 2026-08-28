@@ -263,7 +263,13 @@
     }
     return self;
 }
-// 触摸穿透已关闭 - 窗口拦截所有触摸
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    // 只在panel范围内拦截触摸，其余穿透到下面的App
+    if (self.panel && !self.panel.hidden && CGRectContainsPoint(self.panel.frame, point)) {
+        return [super hitTest:point withEvent:event];
+    }
+    return nil;
+}
 - (void)makePanel {
     CGFloat sw = [UIScreen mainScreen].bounds.size.width;
     CGFloat sh = [UIScreen mainScreen].bounds.size.height;
