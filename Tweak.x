@@ -129,7 +129,7 @@
 }
 
 - (void)addText:(NSString *)text source:(NSString *)src {
-    if (!self.isCapturing || text.length < 5) return;
+    if (!self.isCapturing || text.length < 3) return;
     if ([self.seenTexts containsObject:text]) return;
     // UILabel/UITextView文本需要过滤噪声
     if ([src hasPrefix:@"UILabel"] || [src hasPrefix:@"UITextView"] || [src hasPrefix:@"KVC"]) {
@@ -591,11 +591,24 @@
 %hook NSURLSession
 - (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))handler {
     DPCaptureManager *m = [DPCaptureManager shared];
+    NSString *url = request.URL.absoluteString;
     if (m.isCapturing) {
-        // 对所有请求都尝试拦截，不过滤URL
+        BOOL isReviewBin = [url containsString:@"outsidesiftedreviewlist"] ||
+                           [url containsString:@"reviewlist"] ||
+                           [url containsString:@"review"];
         return %orig(request, ^(NSData *data, NSURLResponse *response, NSError *error) {
             if (data && data.length > 0) {
                 @try {
+                    if (isReviewBin) {
+                        NSLog(@"[DPCommentCapture] >>> review bin URL: %@ (%lu bytes)", url, (unsigned long)data.length);
+                        // 保存原始bin文件供分析
+                        NSString *dir = @"/var/mobile/Documents/DPCommentCapture";
+                        [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+                        NSString *ts = [NSString stringWithFormat:@"%ld", (long)[[NSDate date] timeIntervalSince1970]];
+                        NSString *savePath = [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@_review.bin", ts]];
+                        [data writeToFile:savePath atomically:YES];
+                        NSLog(@"[DPCommentCapture] saved bin to %@", savePath);
+                    }
                     // 先尝试JSON
                     id json = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingAllowFragments error:nil];
                     if (json) {
@@ -605,7 +618,7 @@
                         [m performSelector:sel withObject:json];
 #pragma clang diagnostic pop
                     }
-                    // 无论JSON是否成功，都尝试从二进制中提取字符串
+                    // 尝试从二进制中提取字符串（review bin用更低阈值）
                     SEL sel2 = NSSelectorFromString(@"extractStringsFromData:");
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
@@ -646,6 +659,25 @@
             NSLog(@"[DPCommentCapture] >>> review API: %@", url);
         }
     }
+}
+%end
+
+// ==================== Hook: NSJSONSerialization 拦截所有JSON解析 ====================
+// 点评App可能先解密响应体再解析JSON，hook解析点可抓到真实数据
+%hook NSJSONSerialization
++ (id)JSONObjectWithData:(NSData *)data options:(NSJSONReadingOptions)opt error:(NSError **)error {
+    id result = %orig;
+    DPCaptureManager *m = [DPCaptureManager shared];
+    if (m.isCapturing && result) {
+        @try {
+            SEL sel = NSSelectorFromString(@"parseReviewJSON:");
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            [m performSelector:sel withObject:result];
+#pragma clang diagnostic pop
+        } @catch(id e) {}
+    }
+    return result;
 }
 %end
 
@@ -757,7 +789,7 @@
     }
 }
 - (void)extractStringsFromData:(NSData *)data {
-    // 从二进制数据中提取UTF8字符串
+    // 从二进制数据(protobuf等)中提取UTF8字符串
     const char *bytes = (const char *)data.bytes;
     NSUInteger length = data.length;
     if (length < 10) return;
@@ -788,10 +820,10 @@
                 }
                 i += charLen;
             } else {
-                if (consecutive > 15) {
+                if (consecutive > 6) {
                     NSString *clean = [result stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-                    if (clean.length > 10) {
-                        [self addText:clean source:@"network_binary"];
+                    if (clean.length > 4) {
+                        [self addText:clean source:@"review_bin"];
                         [[DPFloatWindow shared] updateCount];
                     }
                 }
@@ -800,10 +832,10 @@
                 i++;
             }
         } else {
-            if (consecutive > 15) {
+            if (consecutive > 6) {
                 NSString *clean = [result stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-                if (clean.length > 10) {
-                    [self addText:clean source:@"network_binary"];
+                if (clean.length > 4) {
+                    [self addText:clean source:@"review_bin"];
                     [[DPFloatWindow shared] updateCount];
                 }
             }
@@ -813,10 +845,10 @@
         }
     }
     // 处理最后一段
-    if (consecutive > 15) {
+    if (consecutive > 6) {
         NSString *clean = [result stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        if (clean.length > 10) {
-            [self addText:clean source:@"network_binary"];
+        if (clean.length > 4) {
+            [self addText:clean source:@"review_bin"];
             [[DPFloatWindow shared] updateCount];
         }
     }
