@@ -304,20 +304,26 @@
     DPCaptureManager *m = [DPCaptureManager shared];
     m.isCapturing = !m.isCapturing;
     CGFloat sw = [UIScreen mainScreen].bounds.size.width;
+    CGFloat sh = [UIScreen mainScreen].bounds.size.height;
     if (m.isCapturing) {
         [self.toggleBtn setTitle:@"停止抓取" forState:UIControlStateNormal];
         self.panel.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:0.95];
         self.panelExpanded = YES;
         self.clearBtn.hidden = NO;
         self.panel.frame = CGRectMake(0,0,sw,80);
-        self.frame = CGRectMake(0,self.frame.origin.y,sw,80);
+        // 底部对齐：保持底部位置不变
+        CGFloat bottom = self.frame.origin.y + self.frame.size.height;
+        if (bottom > sh) bottom = sh;
+        self.frame = CGRectMake(0, bottom - 80, sw, 80);
     } else {
         [self.toggleBtn setTitle:@"开始抓取" forState:UIControlStateNormal];
         self.panel.backgroundColor = [UIColor colorWithRed:0.1 green:0.5 blue:0.9 alpha:0.95];
         self.panelExpanded = NO;
         self.clearBtn.hidden = YES;
         self.panel.frame = CGRectMake(0,0,sw,44);
-        self.frame = CGRectMake(0,self.frame.origin.y,sw,44);
+        CGFloat bottom = self.frame.origin.y + self.frame.size.height;
+        if (bottom > sh) bottom = sh;
+        self.frame = CGRectMake(0, bottom - 44, sw, 44);
     }
     [self updateCount];
 }
@@ -384,8 +390,9 @@
 }
 - (void)show {
     CGFloat sw = [UIScreen mainScreen].bounds.size.width;
+    CGFloat sh = [UIScreen mainScreen].bounds.size.height;
     self.hidden = NO;
-    self.frame = CGRectMake(0, 0, sw, 44);
+    self.frame = CGRectMake(0, sh - 44, sw, 44);
     self.panel.frame = CGRectMake(0,0,sw,44);
 }
 @end
