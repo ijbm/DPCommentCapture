@@ -1,0 +1,55 @@
+name: Build DPCommentCapture
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install ldid
+      run: brew install ldid
+
+    - name: Setup Theos
+      run: |
+        git clone --recursive https://github.com/theos/theos.git ~/theos
+        echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+
+    - name: Create SDK symlink
+      run: |
+        mkdir -p $THEOS/sdks
+        # Use the macOS SDK as a fallback; Theos will use it for headers
+        ls -la $THEOS/sdks/ || true
+
+    - name: Build
+      run: |
+        echo "THEOS=$THEOS"
+        make clean
+        make package FINALPACKAGE=1
+      env:
+        THEOS: ${{ env.THEOS }}
+
+    - name: Upload deb artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: DPCommentCapture-deb
+        path: |
+          packages/*.deb
+        if-no-files-found: warn
+
+    - name: Upload build logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-logs
+        path: |
+          .theos/
+          *.log
