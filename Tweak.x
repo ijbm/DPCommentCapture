@@ -264,7 +264,6 @@
 // 触摸穿透已关闭 - 窗口拦截所有触摸
 - (void)makePanel {
     CGFloat sw = [UIScreen mainScreen].bounds.size.width;
-    CGFloat sh = [UIScreen mainScreen].bounds.size.height;
     // 顶部条 - 全屏宽，放在屏幕顶部
     self.panel = [[UIView alloc] initWithFrame:CGRectMake(0, 0, sw, 44)];
     self.panel.backgroundColor = [UIColor colorWithRed:0.1 green:0.5 blue:0.9 alpha:0.95];
@@ -344,7 +343,6 @@
     DPCaptureManager *m = [DPCaptureManager shared];
     m.isCapturing = !m.isCapturing;
     CGFloat sw = [UIScreen mainScreen].bounds.size.width;
-    CGFloat sh = [UIScreen mainScreen].bounds.size.height;
     if (m.isCapturing) {
         [self.toggleBtn setTitle:@"停止抓取" forState:UIControlStateNormal];
         self.panel.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:0.95];
