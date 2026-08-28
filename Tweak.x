@@ -190,7 +190,8 @@
 @implementation DPFloatWindow
 + (instancetype)shared {
     static DPFloatWindow *w; static dispatch_once_t t;
-    dispatch_once(&t,^{ w = [[DPFloatWindow alloc] initWithFrame:CGRectMake(0,0,90,44)]; });
+    CGFloat sw = [UIScreen mainScreen].bounds.size.width;
+    dispatch_once(&t,^{ w = [[DPFloatWindow alloc] initWithFrame:CGRectMake(0,0,sw,44)]; });
     return w;
 }
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -204,104 +205,99 @@
     return self;
 }
 - (void)makePanel {
-    self.panel = [[UIView alloc] initWithFrame:CGRectMake(0,0,90,44)];
+    CGFloat sw = [UIScreen mainScreen].bounds.size.width;
+    // 顶部条 - 全屏宽
+    self.panel = [[UIView alloc] initWithFrame:CGRectMake(0,0,sw,44)];
     self.panel.backgroundColor = [UIColor colorWithRed:0.1 green:0.5 blue:0.9 alpha:0.95];
-    self.panel.layer.cornerRadius = 22;
-    self.panel.layer.masksToBounds = YES;
     [self.rootViewController.view addSubview:self.panel];
 
+    // 左侧：开始/停止按钮
+    CGFloat btnW = (sw - 80) / 4.0;
     self.toggleBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.toggleBtn.frame = CGRectMake(0,0,90,44);
-    [self.toggleBtn setTitle:@"开始" forState:UIControlStateNormal];
+    self.toggleBtn.frame = CGRectMake(0,0,btnW,44);
+    [self.toggleBtn setTitle:@"开始抓取" forState:UIControlStateNormal];
     [self.toggleBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    self.toggleBtn.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+    self.toggleBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
     [self.toggleBtn addTarget:self action:@selector(onToggle) forControlEvents:UIControlEventTouchUpInside];
     [self.panel addSubview:self.toggleBtn];
 
-    self.countLabel = [[UILabel alloc] initWithFrame:CGRectMake(0,44,90,18)];
+    // 计数标签
+    self.countLabel = [[UILabel alloc] initWithFrame:CGRectMake(btnW,0,80,44)];
     self.countLabel.text = @"0条";
     self.countLabel.textColor = [UIColor whiteColor];
-    self.countLabel.font = [UIFont systemFontOfSize:11];
+    self.countLabel.font = [UIFont boldSystemFontOfSize:14];
     self.countLabel.textAlignment = NSTextAlignmentCenter;
-    self.countLabel.backgroundColor = [UIColor colorWithRed:0.1 green:0.4 blue:0.8 alpha:0.95];
-    self.countLabel.hidden = YES;
     [self.panel addSubview:self.countLabel];
 
-    // 手动扫描按钮
+    // 扫描按钮
     self.scanBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.scanBtn.frame = CGRectMake(0,62,90,28);
-    [self.scanBtn setTitle:@"扫描当前页" forState:UIControlStateNormal];
+    self.scanBtn.frame = CGRectMake(btnW+80,0,btnW,44);
+    [self.scanBtn setTitle:@"扫描" forState:UIControlStateNormal];
     [self.scanBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    self.scanBtn.titleLabel.font = [UIFont systemFontOfSize:12];
-    self.scanBtn.backgroundColor = [UIColor colorWithRed:0.3 green:0.5 blue:0.8 alpha:0.95];
-    self.scanBtn.hidden = YES;
+    self.scanBtn.titleLabel.font = [UIFont systemFontOfSize:14];
     [self.scanBtn addTarget:self action:@selector(onScan) forControlEvents:UIControlEventTouchUpInside];
     [self.panel addSubview:self.scanBtn];
 
+    // CSV导出
     self.exportCSVBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.exportCSVBtn.frame = CGRectMake(0,90,45,28);
+    self.exportCSVBtn.frame = CGRectMake((btnW+80)*2,0,btnW,44);
     [self.exportCSVBtn setTitle:@"CSV" forState:UIControlStateNormal];
     [self.exportCSVBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    self.exportCSVBtn.titleLabel.font = [UIFont systemFontOfSize:12];
-    self.exportCSVBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:0.3 alpha:0.95];
-    self.exportCSVBtn.hidden = YES;
+    self.exportCSVBtn.titleLabel.font = [UIFont systemFontOfSize:14];
     [self.exportCSVBtn addTarget:self action:@selector(onExportCSV) forControlEvents:UIControlEventTouchUpInside];
     [self.panel addSubview:self.exportCSVBtn];
 
+    // JSON导出
     self.exportJSONBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.exportJSONBtn.frame = CGRectMake(45,90,45,28);
+    self.exportJSONBtn.frame = CGRectMake((btnW+80)*3,0,btnW,44);
     [self.exportJSONBtn setTitle:@"JSON" forState:UIControlStateNormal];
     [self.exportJSONBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    self.exportJSONBtn.titleLabel.font = [UIFont systemFontOfSize:12];
-    self.exportJSONBtn.backgroundColor = [UIColor colorWithRed:0.6 green:0.4 blue:0.2 alpha:0.95];
-    self.exportJSONBtn.hidden = YES;
+    self.exportJSONBtn.titleLabel.font = [UIFont systemFontOfSize:14];
     [self.exportJSONBtn addTarget:self action:@selector(onExportJSON) forControlEvents:UIControlEventTouchUpInside];
     [self.panel addSubview:self.exportJSONBtn];
 
-    // 清空按钮
+    // 清空按钮（第二行，展开时显示）
     self.clearBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.clearBtn.frame = CGRectMake(0,118,90,24);
-    [self.clearBtn setTitle:@"清空" forState:UIControlStateNormal];
+    self.clearBtn.frame = CGRectMake(0,44,sw,36);
+    [self.clearBtn setTitle:@"清空全部" forState:UIControlStateNormal];
     [self.clearBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    self.clearBtn.titleLabel.font = [UIFont systemFontOfSize:12];
+    self.clearBtn.titleLabel.font = [UIFont systemFontOfSize:14];
     self.clearBtn.backgroundColor = [UIColor colorWithRed:0.5 green:0.1 blue:0.1 alpha:0.95];
     self.clearBtn.hidden = YES;
     [self.clearBtn addTarget:self action:@selector(onClear) forControlEvents:UIControlEventTouchUpInside];
     [self.panel addSubview:self.clearBtn];
 
+    // 拖动手势（仅垂直拖动）
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(onPan:)];
     [self.panel addGestureRecognizer:pan];
 }
 - (void)onPan:(UIPanGestureRecognizer *)g {
     CGPoint t = [g translationInView:self];
-    self.center = CGPointMake(self.center.x + t.x, self.center.y + t.y);
+    CGFloat newY = self.center.y + t.y;
+    // 限制在屏幕范围内
+    CGFloat sh = [UIScreen mainScreen].bounds.size.height;
+    newY = MAX(22, MIN(sh - 22, newY));
+    self.center = CGPointMake(self.center.x, newY);
     [g setTranslation:CGPointZero inView:self];
 }
 - (void)onToggle {
     DPCaptureManager *m = [DPCaptureManager shared];
     m.isCapturing = !m.isCapturing;
+    CGFloat sw = [UIScreen mainScreen].bounds.size.width;
     if (m.isCapturing) {
-        [self.toggleBtn setTitle:@"停止" forState:UIControlStateNormal];
+        [self.toggleBtn setTitle:@"停止抓取" forState:UIControlStateNormal];
         self.panel.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:0.95];
         self.panelExpanded = YES;
-        self.countLabel.hidden = NO;
-        self.scanBtn.hidden = NO;
-        self.exportCSVBtn.hidden = NO;
-        self.exportJSONBtn.hidden = NO;
         self.clearBtn.hidden = NO;
-        self.panel.frame = CGRectMake(0,0,90,142);
-        self.frame = CGRectMake(self.frame.origin.x, self.frame.origin.y, 90, 142);
+        self.panel.frame = CGRectMake(0,0,sw,80);
+        self.frame = CGRectMake(0,self.frame.origin.y,sw,80);
     } else {
-        [self.toggleBtn setTitle:@"开始" forState:UIControlStateNormal];
+        [self.toggleBtn setTitle:@"开始抓取" forState:UIControlStateNormal];
         self.panel.backgroundColor = [UIColor colorWithRed:0.1 green:0.5 blue:0.9 alpha:0.95];
         self.panelExpanded = NO;
-        self.countLabel.hidden = YES;
-        self.scanBtn.hidden = YES;
-        self.exportCSVBtn.hidden = YES;
-        self.exportJSONBtn.hidden = YES;
         self.clearBtn.hidden = YES;
-        self.panel.frame = CGRectMake(0,0,90,44);
-        self.frame = CGRectMake(self.frame.origin.x, self.frame.origin.y, 90, 44);
+        self.panel.frame = CGRectMake(0,0,sw,44);
+        self.frame = CGRectMake(0,self.frame.origin.y,sw,44);
     }
     [self updateCount];
 }
@@ -367,8 +363,10 @@
     [[self rootViewController] presentViewController:activityVC animated:YES completion:nil];
 }
 - (void)show {
+    CGFloat sw = [UIScreen mainScreen].bounds.size.width;
     self.hidden = NO;
-    self.frame = CGRectMake([UIScreen mainScreen].bounds.size.width - 100, 120, 90, 44);
+    self.frame = CGRectMake(0, 0, sw, 44);
+    self.panel.frame = CGRectMake(0,0,sw,44);
 }
 @end
 
