@@ -264,8 +264,9 @@
 // 触摸穿透已关闭 - 窗口拦截所有触摸
 - (void)makePanel {
     CGFloat sw = [UIScreen mainScreen].bounds.size.width;
-    // 顶部条 - 全屏宽，放在屏幕顶部
-    self.panel = [[UIView alloc] initWithFrame:CGRectMake(0, 0, sw, 44)];
+    CGFloat sh = [UIScreen mainScreen].bounds.size.height;
+    // 浮动条 - 全屏宽，默认在屏幕中间偏上
+    self.panel = [[UIView alloc] initWithFrame:CGRectMake(0, sh * 0.3, sw, 44)];
     self.panel.backgroundColor = [UIColor colorWithRed:0.1 green:0.5 blue:0.9 alpha:0.95];
     [self.rootViewController.view addSubview:self.panel];
 
@@ -426,9 +427,9 @@
     CGFloat sw = [UIScreen mainScreen].bounds.size.width;
     CGFloat sh = [UIScreen mainScreen].bounds.size.height;
     self.hidden = NO;
-    // 窗口全屏，panel在顶部
+    // 窗口全屏，panel浮动在屏幕中间偏上
     self.frame = CGRectMake(0, 0, sw, sh);
-    self.panel.frame = CGRectMake(0, 0, sw, 44);
+    self.panel.frame = CGRectMake(0, sh * 0.3, sw, 44);
 }
 @end
 
