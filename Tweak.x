@@ -294,82 +294,67 @@
 }
 %end
 
-// Hook NSURLSessionDataTask 抓取网络请求返回的评论数据
-%hook NSURLSession
-- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))handler {
-    NSString *url = request.URL.absoluteString;
-    if ([DPCaptureManager shared].isCapturing &&
-        ([url containsString:@"reviewlist"] || [url containsString:@"shopreviewlist"] ||
-         [url containsString:@"dishreviewlist"] || [url containsString:@"extrareviewlist"] ||
-         [url containsString:@"commentlist"] || [url containsString:@"feeddetail"])) {
+// 注意: 不Hook NSURLSession，因为点评使用自研二进制协议(.bin)
+// 网络拦截会破坏App正常请求导致"没网"
+// 仅通过UI层Hook抓取屏幕上显示的评论内容
 
-        return %orig(request, ^(NSData *data, NSURLResponse *response, NSError *error) {
-            // 尝试解析返回数据中的评论
-            if (data && data.length > 0) {
-                @try {
-                    NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-                    if (json) {
-                        SEL sel = NSSelectorFromString(@"parseReviewJSON:");
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                        [[DPCaptureManager shared] performSelector:sel withObject:json];
-#pragma clang diagnostic pop
-                    }
-                } @catch(id e) {}
+// ==================== UIScrollView 遍历抓取分类 ====================
+@interface UIScrollView (DPCapture)
+- (void)dp_collectCommentsFromSubviews:(NSArray *)views depth:(int)depth;
+@end
+
+@implementation UIScrollView (DPCapture)
+- (void)dp_collectCommentsFromSubviews:(NSArray *)views depth:(int)depth {
+    if (depth > 5) return; // 限制递归深度
+
+    for (UIView *v in views) {
+        // 检查UILabel
+        if ([v isKindOfClass:[UILabel class]]) {
+            UILabel *lbl = (UILabel *)v;
+            NSString *text = lbl.text;
+            if (text.length > 15) {
+                // 过滤：只抓取看起来像评论的文本
+                BOOL isComment = NO;
+                NSArray *keywords = @[@"好吃", @"不错", @"环境", @"服务", @"味道",
+                    @"推荐", @"性价比", @"排队", @"人均", @"地址",
+                    @"口感", @"新鲜", @"正宗", @"地道", @"值得",
+                    @"体验", @"满意", @"失望", @"一般", @"很好",
+                    @"喜欢", @"下次", @"还会", @"不会", @"太",
+                    @"比较", @"感觉", @"觉得", @"真的", @"特别"];
+                for (NSString *kw in keywords) {
+                    if ([text containsString:kw]) { isComment = YES; break; }
+                }
+                // 超过30字的文本大概率是评论正文
+                if (text.length > 30) isComment = YES;
+
+                if (isComment) {
+                    DPComment *c = [DPComment new];
+                    c.content = text;
+                    c.commentId = [NSString stringWithFormat:@"scroll_%lu_%d", (unsigned long)lbl.hash, depth];
+                    [[DPCaptureManager shared] addComment:c];
+                    [[DPFloatWindow shared] updateCount];
+                }
             }
-            handler(data, response, error);
-        });
+        }
+
+        // 递归遍历子视图
+        if (v.subviews.count > 0) {
+            [self dp_collectCommentsFromSubviews:v.subviews depth:depth + 1];
+        }
     }
-    return %orig;
+}
+@end
+
+// ==================== 增强: Hook UIScrollView 滚动时抓取 ====================
+%hook UIScrollView
+- (void)layoutSubviews {
+    %orig;
+    if (![DPCaptureManager shared].isCapturing) return;
+
+    // 遍历子视图查找评论内容
+    [self dp_collectCommentsFromSubviews:self.subviews depth:0];
 }
 %end
-
-// ==================== DPCaptureManager JSON解析扩展 ====================
-@interface DPCaptureManager (JSONParse)
-- (void)parseReviewJSON:(NSDictionary *)json;
-@end
-@implementation DPCaptureManager (JSONParse)
-- (void)parseReviewJSON:(NSDictionary *)json {
-    // 递归搜索JSON中的评论数据
-    [self searchDict:json forKey:@"reviewList"];
-    [self searchDict:json forKey:@"comments"];
-    [self searchDict:json forKey:@"feedList"];
-    [self searchDict:json forKey:@"reviewFeedList"];
-}
-- (void)searchDict:(id)obj forKey:(NSString *)key {
-    if ([obj isKindOfClass:[NSDictionary class]]) {
-        NSDictionary *d = obj;
-        id val = d[key];
-        if (val) {
-            [self extractComments:val];
-        }
-        for (NSString *k in d) {
-            [self searchDict:d[k] forKey:key];
-        }
-    } else if ([obj isKindOfClass:[NSArray class]]) {
-        for (id item in obj) {
-            [self searchDict:item forKey:key];
-        }
-    }
-}
-- (void)extractComments:(id)obj {
-    if (![obj isKindOfClass:[NSArray class]]) return;
-    for (id item in obj) {
-        if (![item isKindOfClass:[NSDictionary class]]) continue;
-        NSDictionary *d = item;
-        DPComment *c = [DPComment new];
-        c.author = d[@"userName"] ?: d[@"author"] ?: d[@"nickName"] ?: d[@"userNick"] ?: @"";
-        c.content = d[@"content"] ?: d[@"reviewText"] ?: d[@"body"] ?: d[@"text"] ?: @"";
-        c.rating = [NSString stringWithFormat:@"%@", d[@"score"] ?: d[@"star"] ?: d[@"rating"] ?: @""];
-        c.date = d[@"date"] ?: d[@"createTime"] ?: d[@"publishedTime"] ?: @"";
-        c.commentId = [NSString stringWithFormat:@"%@", d[@"id"] ?: d[@"reviewId"] ?: d[@"feedId"] ?: @""];
-        if (c.content.length > 0) {
-            [self addComment:c];
-            [[DPFloatWindow shared] updateCount];
-        }
-    }
-}
-@end
 
 // ==================== 入口 ====================
 %ctor {
