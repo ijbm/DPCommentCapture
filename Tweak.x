@@ -4,6 +4,8 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
+#import <CommonCrypto/CommonCrypto.h>
+#import <zlib.h>
 
 // ==================== 评论数据模型 ====================
 @interface DPComment : NSObject
@@ -905,10 +907,261 @@ static void dpLogURL(NSString *url, NSString *method, NSUInteger size) {
 }
 %end
 
+// ==================== Hook: AES解密 + JSON解析 ====================
+// 点评用AES加密响应，走Shark网络层(不用NSURLSession)
+// 需要hook: CCCrypt(一次性) + CCCryptorCreate/Update/Final(多步)
+// 以及ObjC方法: pragmaDecryptWithHeader:, objectFromJSONData:
+
+static NSData* dpGzipInflate(NSData *data) {
+    if (data.length < 2) return nil;
+    const uint8_t *bytes = data.bytes;
+    if (bytes[0] != 0x1f || bytes[1] != 0x8b) return nil; // not gzip
+    z_stream stream;
+    memset(&stream, 0, sizeof(stream));
+    stream.next_in = (Bytef *)data.bytes;
+    stream.avail_in = (uInt)data.length;
+    if (inflateInit2(&stream, 15 + 32) != Z_OK) return nil;
+    NSMutableData *result = [NSMutableData dataWithCapacity:data.length * 4];
+    uint8_t buffer[16384];
+    while (true) {
+        stream.next_out = buffer;
+        stream.avail_out = sizeof(buffer);
+        int status = inflate(&stream, Z_NO_FLUSH);
+        [result appendBytes:buffer length:sizeof(buffer) - stream.avail_out];
+        if (status == Z_STREAM_END) break;
+        if (status != Z_OK) { inflateEnd(&stream); return nil; }
+    }
+    inflateEnd(&stream);
+    return result;
+}
+
+// 处理解密后的数据：gzip解压 → 保存 → JSON解析 → 提取评论
+static void dpProcessDecryptedData(NSData *decrypted, const char *source) {
+    DPCaptureManager *m = [DPCaptureManager shared];
+    if (!m.isCapturing || decrypted.length < 50) return;
+    @try {
+        NSLog(@"[DPCommentCapture] %s: %lu bytes", source, (unsigned long)decrypted.length);
+        // 尝试gzip解压
+        NSData *decompressed = dpGzipInflate(decrypted);
+        NSData *jsonData = decompressed ?: decrypted;
+        if (decompressed) {
+            NSLog(@"[DPCommentCapture] %s gzip: %lu -> %lu bytes", source, (unsigned long)decrypted.length, (unsigned long)decompressed.length);
+        }
+        // 保存解密+解压后的数据
+        static int sCounter = 0;
+        sCounter++;
+        NSString *dir = NSTemporaryDirectory();
+        NSString *fname = [NSString stringWithFormat:@"dp_dec_%d_%d.bin", sCounter, (int)jsonData.length];
+        NSString *savePath = [dir stringByAppendingPathComponent:fname];
+        [jsonData writeToFile:savePath atomically:YES];
+        NSLog(@"[DPCommentCapture] saved to %@", savePath);
+        // 尝试JSON解析
+        id json = [NSJSONSerialization JSONObjectWithData:jsonData options:NSJSONReadingAllowFragments error:nil];
+        if (json) {
+            NSLog(@"[DPCommentCapture] %s JSON OK: %@", source, [json class]);
+            SEL sel = NSSelectorFromString(@"parseReviewJSON:");
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            [m performSelector:sel withObject:json];
+#pragma clang diagnostic pop
+        } else {
+            SEL sel2 = NSSelectorFromString(@"extractStringsFromData:");
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            [m performSelector:sel2 withObject:jsonData];
+#pragma clang diagnostic pop
+        }
+    } @catch(id e) {}
+}
+
+// --- Hook 1: CCCrypt (一次性AES解密) ---
+%hookf(CCCryptorStatus, CCCrypt, CCOperation op, CCAlgorithm alg, CCOptions options,
+       const void *key, size_t keyLength, const void *iv,
+       const void *dataIn, size_t dataInLength,
+       void *dataOut, size_t dataOutAvailable, size_t *dataOutMoved) {
+    CCCryptorStatus ret = %orig;
+    if (ret == kCCSuccess && op == kCCDecrypt && dataOutMoved && *dataOutMoved > 100) {
+        NSData *decrypted = [NSData dataWithBytes:dataOut length:*dataOutMoved];
+        dpProcessDecryptedData(decrypted, "CCCrypt");
+    }
+    return ret;
+}
+
+// --- Hook 2: CCCryptorCreateWithMode (多步解密-创建) ---
+// 记录解密cryptor的指针，用于Update/Final时识别
+static NSMutableSet *sDecryptCryptors = nil;
+
+%hookf(CCCryptorStatus, CCCryptorCreateWithMode, CCOperation op, CCMode mode, CCAlgorithm alg,
+       CCPadding padding, const void *key, size_t keyLength, const void *iv,
+       const void *tweak, size_t tweakLength, int numRounds, CCModeOptions options,
+       CCCryptorRef *cryptorRef) {
+    CCCryptorStatus ret = %orig;
+    if (ret == kCCSuccess && op == kCCDecrypt && cryptorRef && *cryptorRef) {
+        if (!sDecryptCryptors) sDecryptCryptors = [NSMutableSet set];
+        @synchronized(sDecryptCryptors) {
+            [sDecryptCryptors addObject:[NSValue valueWithPointer:*cryptorRef]];
+        }
+        NSLog(@"[DPCommentCapture] CCCryptorCreateWithMode decrypt created");
+    }
+    return ret;
+}
+
+// --- Hook 3: CCCryptorCreate (简版创建) ---
+%hookf(CCCryptorStatus, CCCryptorCreate, CCOperation op, CCAlgorithm alg, CCOptions options,
+       const void *key, size_t keyLength, const void *iv,
+       CCCryptorRef *cryptorRef) {
+    CCCryptorStatus ret = %orig;
+    if (ret == kCCSuccess && op == kCCDecrypt && cryptorRef && *cryptorRef) {
+        if (!sDecryptCryptors) sDecryptCryptors = [NSMutableSet set];
+        @synchronized(sDecryptCryptors) {
+            [sDecryptCryptors addObject:[NSValue valueWithPointer:*cryptorRef]];
+        }
+        NSLog(@"[DPCommentCapture] CCCryptorCreate decrypt created");
+    }
+    return ret;
+}
+
+// --- Hook 4: CCCryptorUpdate (多步解密-更新) ---
+// 收集每个cryptor的解密输出
+static NSMutableDictionary *sCryptorBuffers = nil;
+
+%hookf(CCCryptorStatus, CCCryptorUpdate, CCCryptorRef cryptorRef,
+       const void *dataIn, size_t dataInLength,
+       void *dataOut, size_t dataOutAvailable, size_t *dataOutMoved) {
+    CCCryptorStatus ret = %orig;
+    if (ret == kCCSuccess && cryptorRef && dataOutMoved && *dataOutMoved > 0) {
+        BOOL isDecrypt = NO;
+        if (sDecryptCryptors) {
+            @synchronized(sDecryptCryptors) {
+                isDecrypt = [sDecryptCryptors containsObject:[NSValue valueWithPointer:cryptorRef]];
+            }
+        }
+        if (isDecrypt) {
+            if (!sCryptorBuffers) sCryptorBuffers = [NSMutableDictionary dictionary];
+            @synchronized(sCryptorBuffers) {
+                NSValue *key = [NSValue valueWithPointer:cryptorRef];
+                NSMutableData *buf = sCryptorBuffers[key];
+                if (!buf) { buf = [NSMutableData data]; sCryptorBuffers[key] = buf; }
+                [buf appendBytes:dataOut length:*dataOutMoved];
+            }
+        }
+    }
+    return ret;
+}
+
+// --- Hook 5: CCCryptorFinal (多步解密-完成) ---
+%hookf(CCCryptorStatus, CCCryptorFinal, CCCryptorRef cryptorRef,
+       void *dataOut, size_t dataOutAvailable, size_t *dataOutMoved) {
+    CCCryptorStatus ret = %orig;
+    if (ret == kCCSuccess && cryptorRef) {
+        BOOL isDecrypt = NO;
+        if (sDecryptCryptors) {
+            @synchronized(sDecryptCryptors) {
+                isDecrypt = [sDecryptCryptors containsObject:[NSValue valueWithPointer:cryptorRef]];
+            }
+        }
+        if (isDecrypt) {
+            // 追加final输出
+            NSMutableData *fullBuf = nil;
+            @synchronized(sCryptorBuffers) {
+                NSValue *key = [NSValue valueWithPointer:cryptorRef];
+                fullBuf = [sCryptorBuffers[key] mutableCopy];
+                if (dataOutMoved && *dataOutMoved > 0) {
+                    [fullBuf appendBytes:dataOut length:*dataOutMoved];
+                }
+                [sCryptorBuffers removeObjectForKey:key];
+            }
+            if (fullBuf && fullBuf.length > 100) {
+                dpProcessDecryptedData(fullBuf, "CCCryptorFinal");
+            }
+        }
+    }
+    return ret;
+}
+
+// --- Hook 6: CCCryptorRelease (清理) ---
+%hookf(void, CCCryptorRelease, CCCryptorRef cryptorRef) {
+    if (cryptorRef && sDecryptCryptors) {
+        @synchronized(sDecryptCryptors) {
+            [sDecryptCryptors removeObject:[NSValue valueWithPointer:cryptorRef]];
+        }
+        @synchronized(sCryptorBuffers) {
+            [sCryptorBuffers removeObjectForKey:[NSValue valueWithPointer:cryptorRef]];
+        }
+    }
+    %orig;
+}
+
+// --- Hook 7: 运行时查找并hook ObjC解密/JSON方法 ---
+// 在%ctor中用dispatch_after延迟执行，确保所有类已加载
+static void dpHookObjcMethods(void) {
+    // 查找实现了 pragmaDecryptWithHeader: 的类
+    Class *classes = NULL;
+    unsigned int count = 0;
+    classes = objc_copyClassList(&count);
+    for (unsigned int i = 0; i < count; i++) {
+        Class cls = classes[i];
+        // pragmaDecryptWithHeader:
+        SEL selDecrypt = NSSelectorFromString(@"pragmaDecryptWithHeader:");
+        if (class_getInstanceMethod(cls, selDecrypt)) {
+            NSLog(@"[DPCommentCapture] Found pragmaDecryptWithHeader: on class %@", NSStringFromClass(cls));
+            // 用method_swizzling hook
+            Method origM = class_getInstanceMethod(cls, selDecrypt);
+            IMP origImp = method_getImplementation(origM);
+            IMP newImp = imp_implementationWithBlock(^(id self, NSData *header) {
+                NSData *result = ((NSData*(*)(id, SEL, NSData*))origImp)(self, selDecrypt, header);
+                if (result && result.length > 100) {
+                    NSLog(@"[DPCommentCapture] pragmaDecryptWithHeader: result %lu bytes", (unsigned long)result.length);
+                    dpProcessDecryptedData(result, "pragmaDecrypt");
+                }
+                return result;
+            });
+            method_setImplementation(origM, newImp);
+        }
+        // objectFromJSONData:
+        SEL selJson = NSSelectorFromString(@"objectFromJSONData:");
+        if (class_getInstanceMethod(cls, selJson)) {
+            NSLog(@"[DPCommentCapture] Found objectFromJSONData: on class %@", NSStringFromClass(cls));
+            Method origM2 = class_getInstanceMethod(cls, selJson);
+            IMP origImp2 = method_getImplementation(origM2);
+            IMP newImp2 = imp_implementationWithBlock(^(id self, NSData *data) {
+                id result = ((id(*)(id, SEL, NSData*))origImp2)(self, selJson, data);
+                if (data && data.length > 100 && [DPCaptureManager shared].isCapturing) {
+                    NSLog(@"[DPCommentCapture] objectFromJSONData: data %lu bytes -> %@", (unsigned long)data.length, [result class]);
+                    // 保存原始JSON数据
+                    static int sJsonCount = 0;
+                    sJsonCount++;
+                    NSString *dir = NSTemporaryDirectory();
+                    NSString *fname = [NSString stringWithFormat:@"dp_json_%d.bin", sJsonCount];
+                    NSString *savePath = [dir stringByAppendingPathComponent:fname];
+                    [data writeToFile:savePath atomically:YES];
+                    NSLog(@"[DPCommentCapture] saved JSON data to %@", savePath);
+                    // 解析评论
+                    if (result) {
+                        SEL selParse = NSSelectorFromString(@"parseReviewJSON:");
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                        [[DPCaptureManager shared] performSelector:selParse withObject:result];
+#pragma clang diagnostic pop
+                    }
+                }
+                return result;
+            });
+            method_setImplementation(origM2, newImp2);
+        }
+    }
+    free(classes);
+    NSLog(@"[DPCommentCapture] ObjC method hooking complete");
+}
+
 // ==================== 入口 ====================
 %ctor {
     dispatch_async(dispatch_get_main_queue(), ^{
         [[DPFloatWindow shared] show];
     });
-    NSLog(@"[DPCommentCapture] v4 loaded for Dianping");
+    // 延迟3秒hook ObjC方法，确保所有类已加载
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        dpHookObjcMethods();
+    });
+    NSLog(@"[DPCommentCapture] v7 loaded for Dianping");
 }
