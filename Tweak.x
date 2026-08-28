@@ -73,6 +73,7 @@
 @property (strong,nonatomic) UIButton *collapseBtn;
 @property (assign,nonatomic) BOOL panelExpanded;
 @property (assign,nonatomic) BOOL panelCollapsed;
+@property (assign,nonatomic) BOOL isPresenting;
 + (instancetype)shared;
 - (void)show;
 - (void)updateCount;
@@ -264,6 +265,10 @@
     return self;
 }
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    // 弹出分享面板/Alert时全屏拦截触摸
+    if (self.isPresenting) {
+        return [super hitTest:point withEvent:event];
+    }
     // 只在panel范围内拦截触摸，其余穿透到下面的App
     if (self.panel && !self.panel.hidden && CGRectContainsPoint(self.panel.frame, point)) {
         return [super hitTest:point withEvent:event];
@@ -431,17 +436,24 @@
 }
 - (void)onClear {
     UIAlertController *a = [UIAlertController alertControllerWithTitle:@"清空确认" message:[NSString stringWithFormat:@"确认清空 %lu 条评论？", (unsigned long)[DPCaptureManager shared].comments.count] preferredStyle:UIAlertControllerStyleAlert];
-    [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
+        self.isPresenting = NO;
+    }]];
     [a addAction:[UIAlertAction actionWithTitle:@"清空" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         [[DPCaptureManager shared] clear];
         [self updateCount];
+        self.isPresenting = NO;
     }]];
+    self.isPresenting = YES;
     [[self rootViewController] presentViewController:a animated:YES completion:nil];
 }
 - (void)shareFile:(NSString *)content name:(NSString *)name {
     if ([DPCaptureManager shared].comments.count == 0) {
         UIAlertController *a = [UIAlertController alertControllerWithTitle:@"无数据" message:@"没有可导出的评论" preferredStyle:UIAlertControllerStyleAlert];
-        [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            self.isPresenting = NO;
+        }]];
+        self.isPresenting = YES;
         [[self rootViewController] presentViewController:a animated:YES completion:nil];
         return;
     }
@@ -459,9 +471,13 @@
         if (completed) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 UIAlertController *a = [UIAlertController alertControllerWithTitle:@"导出成功" message:[NSString stringWithFormat:@"已通过 %@ 导出", activityType ?: @"分享"] preferredStyle:UIAlertControllerStyleAlert];
-                [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                    self.isPresenting = NO;
+                }]];
                 [[self rootViewController] presentViewController:a animated:YES completion:nil];
             });
+        } else {
+            self.isPresenting = NO;
         }
         // 清理临时文件
         [[NSFileManager defaultManager] removeItemAtPath:filePath error:nil];
@@ -471,6 +487,7 @@
         activityVC.popoverPresentationController.sourceView = self.panel;
         activityVC.popoverPresentationController.sourceRect = self.panel.bounds;
     }
+    self.isPresenting = YES;
     [[self rootViewController] presentViewController:activityVC animated:YES completion:nil];
 }
 - (void)show {
