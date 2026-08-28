@@ -74,6 +74,7 @@
 + (instancetype)shared;
 - (void)show;
 - (void)updateCount;
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event;
 @end
 
 @implementation DPCaptureManager
@@ -211,7 +212,8 @@
 + (instancetype)shared {
     static DPFloatWindow *w; static dispatch_once_t t;
     CGFloat sw = [UIScreen mainScreen].bounds.size.width;
-    dispatch_once(&t,^{ w = [[DPFloatWindow alloc] initWithFrame:CGRectMake(0,0,sw,44)]; });
+    CGFloat sh = [UIScreen mainScreen].bounds.size.height;
+    dispatch_once(&t,^{ w = [[DPFloatWindow alloc] initWithFrame:CGRectMake(0,0,sw,sh)]; });
     return w;
 }
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -220,14 +222,23 @@
         self.windowLevel = UIWindowLevelAlert + 100;
         self.backgroundColor = [UIColor clearColor];
         self.rootViewController = [UIViewController new];
+        self.rootViewController.view.backgroundColor = [UIColor clearColor];
         [self makePanel];
     }
     return self;
 }
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    // 只在panel范围内拦截触摸，其余穿透到下面的App
+    if (self.panel && CGRectContainsPoint(self.panel.frame, point)) {
+        return [super hitTest:point withEvent:event];
+    }
+    return nil;
+}
 - (void)makePanel {
     CGFloat sw = [UIScreen mainScreen].bounds.size.width;
-    // 顶部条 - 全屏宽
-    self.panel = [[UIView alloc] initWithFrame:CGRectMake(0,0,sw,44)];
+    CGFloat sh = [UIScreen mainScreen].bounds.size.height;
+    // 底部条 - 全屏宽，放在屏幕底部
+    self.panel = [[UIView alloc] initWithFrame:CGRectMake(0, sh - 44, sw, 44)];
     self.panel.backgroundColor = [UIColor colorWithRed:0.1 green:0.5 blue:0.9 alpha:0.95];
     [self.rootViewController.view addSubview:self.panel];
 
@@ -293,11 +304,12 @@
 }
 - (void)onPan:(UIPanGestureRecognizer *)g {
     CGPoint t = [g translationInView:self];
-    CGFloat newY = self.center.y + t.y;
-    // 限制在屏幕范围内
     CGFloat sh = [UIScreen mainScreen].bounds.size.height;
-    newY = MAX(22, MIN(sh - 22, newY));
-    self.center = CGPointMake(self.center.x, newY);
+    // 移动panel，限制在屏幕范围内
+    CGRect pf = self.panel.frame;
+    pf.origin.y += t.y;
+    pf.origin.y = MAX(0, MIN(sh - pf.size.height, pf.origin.y));
+    self.panel.frame = pf;
     [g setTranslation:CGPointZero inView:self];
 }
 - (void)onToggle {
@@ -310,20 +322,18 @@
         self.panel.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:0.95];
         self.panelExpanded = YES;
         self.clearBtn.hidden = NO;
-        self.panel.frame = CGRectMake(0,0,sw,80);
-        // 底部对齐：保持底部位置不变
-        CGFloat bottom = self.frame.origin.y + self.frame.size.height;
+        // 向上展开（panel底部不动）
+        CGFloat bottom = self.panel.frame.origin.y + self.panel.frame.size.height;
         if (bottom > sh) bottom = sh;
-        self.frame = CGRectMake(0, bottom - 80, sw, 80);
+        self.panel.frame = CGRectMake(0, bottom - 80, sw, 80);
     } else {
         [self.toggleBtn setTitle:@"开始抓取" forState:UIControlStateNormal];
         self.panel.backgroundColor = [UIColor colorWithRed:0.1 green:0.5 blue:0.9 alpha:0.95];
         self.panelExpanded = NO;
         self.clearBtn.hidden = YES;
-        self.panel.frame = CGRectMake(0,0,sw,44);
-        CGFloat bottom = self.frame.origin.y + self.frame.size.height;
+        CGFloat bottom = self.panel.frame.origin.y + self.panel.frame.size.height;
         if (bottom > sh) bottom = sh;
-        self.frame = CGRectMake(0, bottom - 44, sw, 44);
+        self.panel.frame = CGRectMake(0, bottom - 44, sw, 44);
     }
     [self updateCount];
 }
@@ -392,8 +402,9 @@
     CGFloat sw = [UIScreen mainScreen].bounds.size.width;
     CGFloat sh = [UIScreen mainScreen].bounds.size.height;
     self.hidden = NO;
-    self.frame = CGRectMake(0, sh - 44, sw, 44);
-    self.panel.frame = CGRectMake(0,0,sw,44);
+    // 窗口全屏，panel在底部
+    self.frame = CGRectMake(0, 0, sw, sh);
+    self.panel.frame = CGRectMake(0, sh - 44, sw, 44);
 }
 @end
 
