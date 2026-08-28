@@ -429,6 +429,12 @@
 - (void)onExportCSV {
     NSString *csv = [[DPCaptureManager shared] exportCSV];
     [self shareFile:csv name:@"dianping_comments.csv"];
+    // 同时导出网络日志
+    NSString *logPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"dp_network_log.txt"];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:logPath]) {
+        NSString *log = [NSString stringWithContentsOfFile:logPath encoding:NSUTF8StringEncoding error:nil];
+        if (log) [self shareFile:log name:@"dp_network_log.txt"];
+    }
 }
 - (void)onExportJSON {
     NSString *json = [[DPCaptureManager shared] exportJSON];
@@ -593,41 +599,32 @@
     DPCaptureManager *m = [DPCaptureManager shared];
     NSString *url = request.URL.absoluteString;
     if (m.isCapturing) {
+        // 记录所有URL到日志文件
+        [self logURL:url method:request.HTTPMethod size:0];
+        // 只对非review请求做JSON拦截，避免干扰review bin请求
         BOOL isReviewBin = [url containsString:@"outsidesiftedreviewlist"] ||
-                           [url containsString:@"reviewlist"] ||
-                           [url containsString:@"review"];
-        return %orig(request, ^(NSData *data, NSURLResponse *response, NSError *error) {
-            if (data && data.length > 0) {
-                @try {
-                    NSLog(@"[DPCommentCapture] URL: %@ (%lu bytes)", url, (unsigned long)data.length);
-                    if (isReviewBin) {
-                        NSLog(@"[DPCommentCapture] >>> REVIEW BIN: %@ (%lu bytes)", url, (unsigned long)data.length);
-                        // 保存原始bin文件到沙盒临时目录
-                        NSString *dir = NSTemporaryDirectory();
-                        NSString *ts = [NSString stringWithFormat:@"%ld", (long)[[NSDate date] timeIntervalSince1970]];
-                        NSString *savePath = [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"dp_review_%@.bin", ts]];
-                        [data writeToFile:savePath atomically:YES];
-                        NSLog(@"[DPCommentCapture] saved bin to %@", savePath);
-                    }
-                    // 先尝试JSON
-                    id json = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingAllowFragments error:nil];
-                    if (json) {
-                        SEL sel = NSSelectorFromString(@"parseReviewJSON:");
+                           [url containsString:@"reviewlist"];
+        if (!isReviewBin) {
+            return %orig(request, ^(NSData *data, NSURLResponse *response, NSError *error) {
+                if (data && data.length > 0) {
+                    @try {
+                        id json = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingAllowFragments error:nil];
+                        if (json) {
+                            SEL sel = NSSelectorFromString(@"parseReviewJSON:");
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                        [m performSelector:sel withObject:json];
+                            [m performSelector:sel withObject:json];
 #pragma clang diagnostic pop
-                    }
-                    // 尝试从二进制中提取字符串（review bin用更低阈值）
-                    SEL sel2 = NSSelectorFromString(@"extractStringsFromData:");
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                    [m performSelector:sel2 withObject:data];
-#pragma clang diagnostic pop
-                } @catch(id e) {}
-            }
-            handler(data, response, error);
-        });
+                        }
+                    } @catch(id e) {}
+                }
+                handler(data, response, error);
+            });
+        } else {
+            // review bin请求：不修改handler，只记录URL和响应大小
+            NSLog(@"[DPCommentCapture] >>> REVIEW BIN (no hook): %@", url);
+            return %orig;
+        }
     }
     return %orig;
 }
@@ -637,12 +634,27 @@
     DPCaptureManager *m = [DPCaptureManager shared];
     if (m.isCapturing) {
         NSLog(@"[DPCommentCapture] delegate-mode URL: %@", url);
-        // 如果是review相关URL，保存request信息
+        [self logURL:url method:request.HTTPMethod size:0];
         if ([url containsString:@"review"] || [url containsString:@"sift"] || [url containsString:@"comment"]) {
             NSLog(@"[DPCommentCapture] >>> delegate REVIEW URL: %@", url);
         }
     }
     return %orig;
+}
+// 记录URL到日志文件
+- (void)logURL:(NSString *)url method:(NSString *)method size:(NSUInteger)size {
+    dispatch_async(dispatch_get_global_queue(0,0), ^{
+        NSString *dir = NSTemporaryDirectory();
+        NSString *path = [dir stringByAppendingPathComponent:@"dp_network_log.txt"];
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSMutableString *log = [NSMutableString string];
+        if ([fm fileExistsAtPath:path]) {
+            NSString *old = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+            if (old) [log appendString:old];
+        }
+        [log appendFormat:@"%@ %@ %lu\n", method ?: @"GET", url ?: @"", (unsigned long)size];
+        [log writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    });
 }
 %end
 
@@ -655,6 +667,19 @@
     if (m.isCapturing) {
         NSString *url = self.originalRequest.URL.absoluteString;
         NSLog(@"[DPCommentCapture] TASK: %@", url);
+        // 记录到文件
+        dispatch_async(dispatch_get_global_queue(0,0), ^{
+            NSString *dir = NSTemporaryDirectory();
+            NSString *path = [dir stringByAppendingPathComponent:@"dp_network_log.txt"];
+            NSFileManager *fm = [NSFileManager defaultManager];
+            NSMutableString *log = [NSMutableString string];
+            if ([fm fileExistsAtPath:path]) {
+                NSString *old = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+                if (old) [log appendString:old];
+            }
+            [log appendFormat:@"TASK %@\n", url ?: @""];
+            [log writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        });
     }
 }
 %end
